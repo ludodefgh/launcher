@@ -1,0 +1,11 @@
+# ESP-IDF build output
+build/
+sdkconfig
+sdkconfig.old
+
+# Host-based test binary (see test/test_boot_logic.c build command)
+/test_boot_logic
+
+# Editor/OS cruft
+.vscode/
+.DS_Store

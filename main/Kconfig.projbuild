@@ -1,0 +1,184 @@
+menu "Bootloader Launcher Configuration"
+
+    menu "Slots / partitions"
+
+        config LAUNCHER_APP_SLOT_COUNT
+            int "Nombre de slots d'application"
+            range 1 8
+            default 3
+            help
+                Nombre de partitions "app" gerees par le launcher (hors partition
+                factory du launcher lui-meme). Doit rester coherent avec le nombre
+                d'entrees ota_* declarees dans partitions.csv et avec app_registry.c
+                -- un warning est loggue au boot en cas de mismatch.
+
+        config LAUNCHER_APP_SLOT_SIZE
+            hex "Taille de chaque slot (bytes)"
+            default 0x180000
+            help
+                Taille appliquee a chaque partition app. Doit correspondre a ce qui
+                est declare dans partitions.csv (ou partitions_4mb.csv).
+
+        config LAUNCHER_FACTORY_SIZE
+            hex "Taille de la partition factory (launcher)"
+            default 0x100000
+
+    endmenu
+
+    menu "Navigation (HAL)"
+
+        choice LAUNCHER_NAV_DRIVER
+            prompt "Driver de navigation actif"
+            default LAUNCHER_NAV_DRIVER_EC11
+            help
+                Choix du driver nav_input_driver_t compile dans le launcher.
+                Un seul driver actif a la fois en v1 (pas de detection dynamique).
+
+            config LAUNCHER_NAV_DRIVER_EC11
+                bool "Encodeur rotatif EC11"
+
+            config LAUNCHER_NAV_DRIVER_MOCK
+                bool "Mock (evenements simules depuis la console série)"
+                help
+                    Utile pour tester la logique de menu sans hardware branche.
+        endchoice
+
+        config LAUNCHER_EC11_GPIO_CLK
+            int "GPIO EC11 - CLK (phase A)"
+            depends on LAUNCHER_NAV_DRIVER_EC11
+            default 4
+
+        config LAUNCHER_EC11_GPIO_DT
+            int "GPIO EC11 - DT (phase B)"
+            depends on LAUNCHER_NAV_DRIVER_EC11
+            default 5
+
+        config LAUNCHER_EC11_GPIO_SW
+            int "GPIO EC11 - bouton poussoir"
+            depends on LAUNCHER_NAV_DRIVER_EC11
+            default 6
+
+        config LAUNCHER_EC11_INVERT
+            bool "Inverser le sens de rotation de l'encodeur EC11"
+            depends on LAUNCHER_NAV_DRIVER_EC11
+            default n
+
+        config LAUNCHER_LONG_PRESS_MS
+            int "Seuil appui long (ms)"
+            default 3000
+
+    endmenu
+
+    menu "Ecran (TFT ST7789, SPI)"
+
+        config LAUNCHER_DISPLAY_GPIO_MOSI
+            int "GPIO SPI MOSI"
+            default 11
+
+        config LAUNCHER_DISPLAY_GPIO_SCLK
+            int "GPIO SPI SCLK"
+            default 12
+
+        config LAUNCHER_DISPLAY_GPIO_CS
+            int "GPIO CS"
+            default 10
+
+        config LAUNCHER_DISPLAY_GPIO_DC
+            int "GPIO DC (data/command)"
+            default 9
+
+        config LAUNCHER_DISPLAY_GPIO_RST
+            int "GPIO RESET"
+            default 8
+
+        config LAUNCHER_DISPLAY_GPIO_BL
+            int "GPIO backlight (-1 si non pilote par GPIO)"
+            default 7
+
+        config LAUNCHER_DISPLAY_WIDTH
+            int "Largeur ecran (px)"
+            default 320
+
+        config LAUNCHER_DISPLAY_HEIGHT
+            int "Hauteur ecran (px)"
+            default 240
+
+    endmenu
+
+    menu "Comportement au boot"
+
+        config LAUNCHER_BOOT_SPLASH_MS
+            int "Duree splash au boot direct (ms, 0 = desactive)"
+            default 300
+
+        config LAUNCHER_NVS_NAMESPACE
+            string "Namespace NVS partage launcher/apps"
+            default "launcher"
+
+    endmenu
+
+    menu "Reseau (optionnel)"
+
+        config LAUNCHER_NET_OTA_ENABLE
+            bool "Activer l'OTA reseau (telechargement HTTP d'un programme)"
+            default n
+            select LAUNCHER_NET_WIFI_ENABLE
+            help
+                Ajoute une entree menu pour telecharger un binaire .bin depuis
+                CONFIG_LAUNCHER_NET_OTA_URL_BASE et l'ecrire dans un slot ota_*.
+
+        config LAUNCHER_NET_OTA_URL_BASE
+            string "URL de base du serveur/manifeste OTA"
+            default ""
+            depends on LAUNCHER_NET_OTA_ENABLE
+
+        config LAUNCHER_NET_REMOTE_CONTROL_ENABLE
+            bool "Activer le controle a distance du menu"
+            default n
+            select LAUNCHER_NET_WIFI_ENABLE
+            help
+                Permet de declencher boot_into() depuis un transport reseau
+                (serveur HTTP embarque ou BLE) en plus de la HAL de navigation locale.
+
+        choice LAUNCHER_NET_REMOTE_TRANSPORT
+            prompt "Transport pour le controle a distance"
+            depends on LAUNCHER_NET_REMOTE_CONTROL_ENABLE
+            default LAUNCHER_NET_REMOTE_TRANSPORT_HTTP
+
+            config LAUNCHER_NET_REMOTE_TRANSPORT_HTTP
+                bool "Serveur HTTP (esp_http_server)"
+
+            config LAUNCHER_NET_REMOTE_TRANSPORT_BLE
+                bool "BLE (service GATT custom)"
+                depends on SOC_BLE_SUPPORTED
+        endchoice
+
+        config LAUNCHER_NET_REMOTE_PIN
+            string "PIN/token pour le controle a distance (optionnel)"
+            default ""
+            depends on LAUNCHER_NET_REMOTE_CONTROL_ENABLE
+            help
+                Dissuade un usage accidentel/opportuniste sur le reseau local. Ne pas
+                considerer ceci comme une securite robuste -- usage reseau de
+                confiance uniquement (reseau domestique, pas d'exposition Internet).
+
+        config LAUNCHER_NET_VERSION_CHECK_ENABLE
+            bool "Activer la verification de version distante"
+            default n
+            select LAUNCHER_NET_WIFI_ENABLE
+            help
+                Compare la version de chaque slot (esp_app_desc_t) avec un
+                manifeste distant et affiche un indicateur dans le menu.
+                N'entraine aucun telechargement automatique.
+
+        config LAUNCHER_NET_WIFI_ENABLE
+            bool "Activer le sous-systeme WiFi"
+            default n
+            help
+                Force a y automatiquement des qu'une des 3 fonctionnalites reseau
+                ci-dessus est active (voir "select" sur chacune). Credentials geres
+                via provisioning (NVS), jamais hardcodes/commits -- voir README.
+
+    endmenu
+
+endmenu

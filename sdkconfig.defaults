@@ -1,0 +1,8 @@
+# Common defaults, all targets. Target-specific overrides (partition table,
+# flash size) live in sdkconfig.defaults.<target> and are merged automatically
+# by the ESP-IDF build system based on the target passed to `idf.py set-target`.
+#
+# Default here assumes the main dev board: ESP32-S3, 8MB flash.
+CONFIG_PARTITION_TABLE_CUSTOM=y
+CONFIG_PARTITION_TABLE_CUSTOM_FILENAME="partitions.csv"
+CONFIG_ESPTOOLPY_FLASHSIZE_8MB=y

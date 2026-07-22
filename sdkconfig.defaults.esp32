@@ -1,0 +1,3 @@
+# ESP32 (WROOM/classic): 4MB flash is the common case, fewer/smaller app slots.
+CONFIG_PARTITION_TABLE_CUSTOM_FILENAME="partitions_4mb.csv"
+CONFIG_ESPTOOLPY_FLASHSIZE_4MB=y

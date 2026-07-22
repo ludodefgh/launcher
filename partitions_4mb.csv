@@ -1,0 +1,13 @@
+# Partition table for 4MB flash modules (WROOM/classic, C3, ...).
+# 2 app slots instead of 3, smaller factory and slot sizes than partitions.csv.
+# App partition offsets are left blank so the ESP-IDF partition table
+# generator auto-aligns them to 64KB (see README.md for why) -- the exact
+# resulting offsets are printed by `idf.py build` / `idf.py partition-table`.
+# No optional "storage" nvs partition here (see partitions.csv) to save space.
+#
+# Name,         Type, SubType,  Offset,    Size,     Flags
+nvs,            data, nvs,      0x9000,    0x6000,
+otadata,        data, ota,      0xf000,    0x2000,
+factory,        app,  factory,  ,          0xa0000,
+app_slot1,      app,  ota_0,    ,          0x170000,
+app_slot2,      app,  ota_1,    ,          0x170000,

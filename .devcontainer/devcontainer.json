@@ -1,0 +1,16 @@
+{
+    "name": "launcher (ESP-IDF 5.5, build only)",
+    "image": "espressif/idf:release-v5.5",
+    "workspaceFolder": "/workspaces/launcher",
+    "workspaceMount": "source=${localWorkspaceFolder},target=/workspaces/launcher,type=bind",
+    "customizations": {
+        "vscode": {
+            "extensions": [
+                "ms-vscode.cpptools",
+                "espressif.esp-idf-extension"
+            ]
+        }
+    },
+    "remoteUser": "root",
+    "postCreateCommand": "idf.py --version"
+}

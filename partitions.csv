@@ -1,0 +1,14 @@
+# Partition table for 8MB flash modules (typical S3 dev board). App
+# partition offsets are left blank so the ESP-IDF partition table generator
+# auto-aligns them to 64KB (standard ESP-IDF convention, see any table under
+# components/partition_table/ in the ESP-IDF tree) -- the exact resulting
+# offsets are printed by `idf.py build` / `idf.py partition-table`.
+#
+# Name,         Type, SubType,  Offset,    Size,     Flags
+nvs,            data, nvs,      0x9000,    0x6000,
+otadata,        data, ota,      0xf000,    0x2000,
+factory,        app,  factory,  ,          0x100000,
+app_slot1,      app,  ota_0,    ,          0x180000,
+app_slot2,      app,  ota_1,    ,          0x180000,
+app_slot3,      app,  ota_2,    ,          0x180000,
+storage,        data, nvs,      ,          0x10000,

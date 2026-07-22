@@ -1,0 +1,36 @@
+name: build
+
+on:
+  push:
+  pull_request:
+
+jobs:
+  build:
+    name: Build (${{ matrix.target }})
+    runs-on: ubuntu-latest
+    strategy:
+      fail-fast: false
+      matrix:
+        target: [esp32s3, esp32c3, esp32]
+    container:
+      image: espressif/idf:release-v5.5
+    steps:
+      - uses: actions/checkout@v4
+
+      - name: Build launcher for ${{ matrix.target }}
+        shell: bash
+        run: |
+          . $IDF_PATH/export.sh
+          idf.py set-target ${{ matrix.target }}
+          idf.py build
+
+  host-tests:
+    name: Host-based unit tests
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@v4
+
+      - name: Build and run test_boot_logic
+        run: |
+          gcc -std=c11 -Wall -Wextra -Werror -I main main/boot_logic.c test/test_boot_logic.c -o /tmp/test_boot_logic
+          /tmp/test_boot_logic
