@@ -159,14 +159,124 @@ reusing/extending this repo:
   `CONFIG_LAUNCHER_EC11_INVERT` in `main/nav_input_ec11.c`; keep this in
   mind if you add more bool-driven runtime behavior.
 
+## Network features (optional, off by default)
+
+All three are independently Kconfig-gated and require WiFi station mode
+except the BLE remote transport (see below). None of them can block local
+boot: a WiFi/network failure just leaves that feature inactive for the
+current boot cycle, the local menu still works. **None of this has any
+authentication beyond an optional shared PIN** — see "Security" below.
+
+### WiFi credentials (`CONFIG_LAUNCHER_NET_WIFI_ENABLE`)
+
+Read from NVS (namespace `CONFIG_LAUNCHER_NVS_NAMESPACE`, keys `wifi_ssid`/
+`wifi_pass`) first; if absent, falls back to `CONFIG_LAUNCHER_NET_WIFI_SSID`/
+`CONFIG_LAUNCHER_NET_WIFI_PASSWORD` (put these in a local, gitignored
+`sdkconfig.local`, never in `sdkconfig.defaults`). There's no captive-portal
+provisioning UI yet (spec explicitly allows this simpler fallback for now) —
+see open issues. `net_wifi_save_credentials()` exists for a future
+provisioning flow to call. Connection attempts are capped at ~10s.
+
+### OTA download (`CONFIG_LAUNCHER_NET_OTA_ENABLE`)
+
+Adds a "Telecharger un programme" entry to the bottom of the main menu:
+connect WiFi → fetch the manifest → pick an app → pick a destination slot →
+confirm (this overwrites that slot) → stream the `.bin` straight into the
+chosen partition. Does **not** use the high-level `esp_https_ota` helper,
+which always targets "the next OTA slot" — this project needs an
+explicitly chosen slot, so it uses `esp_ota_begin`/`esp_ota_write`/
+`esp_ota_end` manually against the partition the user picked
+(`main/net_ota.c`). Never auto-boots the freshly written slot; select it
+from the menu afterward like any other slot.
+
+### Version check (`CONFIG_LAUNCHER_NET_VERSION_CHECK_ENABLE`)
+
+Before showing the menu, compares each slot's `esp_app_desc_t.version`
+(read straight from flash, no boot needed) against the manifest and shows a
+`(MAJ)` suffix next to outdated slots. Adds noticeable latency before the
+menu appears (a WiFi connect + HTTP fetch, both bounded) — this is a
+deliberate, honest tradeoff over blocking silently or caching stale results;
+shown to the user as a "VERIF. MISES A JOUR..." status line.
+
+### Manifest format
+
+Both features above fetch `<CONFIG_LAUNCHER_NET_OTA_URL_BASE>/manifest.json`:
+
+```json
+{
+  "apps": [
+    {
+      "name": "ASCII Aquarium",
+      "slot": "app_slot1",
+      "version": "1.2.0",
+      "url": "https://example.com/bins/aquarium.bin",
+      "size": 512000
+    }
+  ]
+}
+```
+
+`slot` is used by version-check to match a manifest entry to a local
+partition; `url` can point anywhere (doesn't have to be under
+`URL_BASE`, e.g. a GitHub Releases asset). `size` is informational only
+(logged as a mismatch warning if it disagrees with what was actually
+downloaded, never trusted for erase sizing — `OTA_SIZE_UNKNOWN` is used
+instead, which erases the whole target partition regardless).
+
+### Remote control (`CONFIG_LAUNCHER_NET_REMOTE_CONTROL_ENABLE`)
+
+Either transport calls the exact same `boot_into()` used by the local menu
+— network is just another event source, per spec.
+
+- **HTTP** (`main/net_remote_http.c`): `esp_http_server` on port 80. `GET /`
+  lists slots with a boot button (and a PIN field if configured); `GET
+  /boot?slot=<label>&pin=<pin>` triggers the boot. Requires WiFi.
+- **BLE** (`main/net_remote_ble.c`): a minimal NimBLE GATT peripheral, no
+  pairing/bonding (PIN is checked at the application layer instead, same as
+  HTTP, to keep both transports symmetric and avoid NimBLE's much larger
+  security-manager surface for what's meant to be a trusted-home-network
+  feature). One service, two characteristics: a READ one returning a
+  comma-separated list of partition labels, and a WRITE one accepting
+  `<slot_label>` or `<slot_label>:<pin>` as plain ASCII to trigger the boot.
+  Independent of WiFi.
+
+  **Manual menuconfig step required**: Kconfig's `select` cannot force a
+  specific member of a `choice` block (a real Kconfig limitation — see
+  "Design decisions" below), so picking this transport does *not*
+  automatically switch the Bluetooth host stack to NimBLE. After enabling
+  it, also go to `Component config > Bluetooth > Host` and pick "NimBLE -
+  BLE only" yourself (Bluedroid, the default, is a different, incompatible
+  API). On classic ESP32 also set `Component config > Bluetooth >
+  Controller > Mode` to "BLE Only".
+
+### Security
+
+None of this is designed to survive a hostile network. `CONFIG_LAUNCHER_NET_REMOTE_PIN`
+is a shared plaintext string checked equal — enough to stop someone on the
+same WiFi/BLE range from accidentally or casually switching your running
+program, not a real access control. Both transports are meant for a
+trusted home network / BLE proximity only; don't expose the HTTP port to
+the internet.
+
+### Flash size tradeoff
+
+Enabling these pulls in WiFi + mbedtls/TLS + `esp_http_client` + cJSON
+(≈1MB combined) and, for BLE remote, NimBLE (another ≈250-300KB) — see the
+sizing comments at the top of `partitions.csv` / `partitions_4mb.csv`.
+`partitions.csv`'s `factory` partition is sized 1.5MB specifically to fit
+all of these at once; `partitions_4mb.csv` was deliberately left smaller
+(640KB) since a 4MB module doesn't have the budget to grow factory without
+seriously cutting into app slot space — see that file's comment for
+concrete measured sizes and guidance. **`idf.py build`'s partition-size
+overflow check is a warning, not a build failure** — `esptool` has no
+concept of partition boundaries and will happily flash straight into the
+next partition, corrupting it silently. Never flash after seeing that
+warning.
+
 ## Out of scope for this iteration
 
 No SD card / dynamic binary loading — programs are flashed statically via
-USB (or network OTA, see `CONFIG_LAUNCHER_NET_OTA_ENABLE`). May be revisited
-in a future iteration. Network features
-(`LAUNCHER_NET_OTA_ENABLE`/`LAUNCHER_NET_REMOTE_CONTROL_ENABLE`/
-`LAUNCHER_NET_VERSION_CHECK_ENABLE`) have their Kconfig options wired up
-already but no implementation yet — see open GitHub issues.
+USB (or network OTA, see above). May be revisited in a future iteration.
 
 ## License
 

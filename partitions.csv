@@ -4,10 +4,24 @@
 # components/partition_table/ in the ESP-IDF tree) -- the exact resulting
 # offsets are printed by `idf.py build` / `idf.py partition-table`.
 #
+# factory is sized 1.5MB (not the more typical 1MB) because enabling all of
+# LAUNCHER_NET_OTA_ENABLE + LAUNCHER_NET_VERSION_CHECK_ENABLE +
+# LAUNCHER_NET_REMOTE_CONTROL_ENABLE(BLE) at once measured ~1.25MB (WiFi +
+# mbedtls/TLS + esp_http_client + cJSON alone is already close to 1MB;
+# NimBLE adds another ~250-300KB on top) -- confirmed by building against
+# the real espressif/idf:release-v5.5 image. Shrink back to 0x100000 if you
+# don't need the network features.
+#
+# `idf.py build` only WARNS on a factory/app size overflow, it does not fail
+# the build -- esptool has no concept of partition boundaries and will
+# happily flash straight into the next partition. Never run `idf.py flash`
+# after a size-overflow warning; fix the sizes first or the next
+# partition's contents get silently corrupted.
+#
 # Name,         Type, SubType,  Offset,    Size,     Flags
 nvs,            data, nvs,      0x9000,    0x6000,
 otadata,        data, ota,      0xf000,    0x2000,
-factory,        app,  factory,  ,          0x100000,
+factory,        app,  factory,  ,          0x180000,
 app_slot1,      app,  ota_0,    ,          0x180000,
 app_slot2,      app,  ota_1,    ,          0x180000,
 app_slot3,      app,  ota_2,    ,          0x180000,

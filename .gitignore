@@ -3,6 +3,9 @@ build/
 sdkconfig
 sdkconfig.old
 
+# Local dev overrides (e.g. real WiFi credentials) -- never commit these
+sdkconfig.local
+
 # Host-based test binary (see test/test_boot_logic.c build command)
 /test_boot_logic
 

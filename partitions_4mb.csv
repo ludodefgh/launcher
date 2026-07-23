@@ -5,6 +5,21 @@
 # resulting offsets are printed by `idf.py build` / `idf.py partition-table`.
 # No optional "storage" nvs partition here (see partitions.csv) to save space.
 #
+# IMPORTANT: factory here (0xa0000 = 640KB) is NOT big enough for the
+# network features. Measured against the real espressif/idf:release-v5.5
+# image: even OTA+version-check+remote-HTTP alone (no BLE) already needs
+# ~0x110000 (~1.06MB); adding BLE remote control pushes it to ~1.25MB (see
+# partitions.csv's comment). A 4MB module has far less room to grow factory
+# without eating into the app slot budget than the 8MB table does -- there
+# is no one-size-fits-all default here, size factory for what you actually
+# enable and accept smaller/fewer app slots as a result.
+#
+# `idf.py build` only WARNS on a factory/app partition overflow, it does not
+# fail the build -- esptool itself has no concept of partition boundaries
+# and will happily flash straight into the next partition. Never run
+# `idf.py flash` after a size-overflow warning; fix the sizes first or the
+# next partition's contents get silently corrupted.
+#
 # Name,         Type, SubType,  Offset,    Size,     Flags
 nvs,            data, nvs,      0x9000,    0x6000,
 otadata,        data, ota,      0xf000,    0x2000,

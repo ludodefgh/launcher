@@ -9,7 +9,9 @@ WROOM). Flashes 3-4 independent firmwares into fixed OTA partitions and lets
 the user pick which one boots, via a TFT + rotary-encoder menu, without
 reflashing. No SD card / dynamic loading in this iteration — see README.md
 "Out of scope". Independent of the `ASCII-Aquarium` repo (a guest app that
-consumes this launcher, not the other way around).
+consumes this launcher, not the other way around). Optional network features
+(OTA download, remote control over HTTP/BLE, version check) are implemented
+and off by default — see README.md "Network features".
 
 ## Model usage convention for this project
 
@@ -46,6 +48,36 @@ again).
 - **License: MIT.** Keep `LICENSE` and any new file headers consistent
   with that.
 
+## ESP-IDF build-system gotchas hit while implementing this (don't re-discover them)
+
+- **`REQUIRES`/`PRIV_REQUIRES` in `main/CMakeLists.txt` cannot reliably be
+  made conditional on `CONFIG_*` Kconfig values** -- verified empirically
+  (a `CONFIG_LAUNCHER_NET_WIFI_ENABLE`-gated `REQUIRES esp_wifi` silently
+  had no effect while the equally-gated `SRCS` entry worked fine; ESP-IDF
+  resolves requirements in an earlier pass, before Kconfig values are
+  necessarily available). Fix in place: `main/CMakeLists.txt` declares
+  every potentially-needed component unconditionally in `REQUIRES`, and
+  keeps only `SRCS` conditional -- that's what actually controls binary
+  size (unused code is dropped at link time via `-ffunction-sections`/
+  `-fdata-sections`, and these components are already part of ESP-IDF's
+  default build set for this target regardless, see any build's
+  `-- Components: ...` log line). If you add a new net_*.c file, follow
+  the same pattern.
+- **Kconfig's `select`/`imply` has no effect on a `choice` block's member
+  symbols** (Kconfig hard limitation, not a bug) -- e.g. can't force
+  `BT_HOST`'s choice to `BT_NIMBLE_ENABLED` from `main/Kconfig.projbuild`.
+  Where this matters (BLE remote transport), the Kconfig prompt's help text
+  documents the manual `menuconfig` step instead of silently failing to
+  work -- see README.md "Remote control" for the exact steps.
+- **A stale `build/` directory silently keeps old component-requirements
+  resolution even after `idf.py set-target` + editing `sdkconfig` +
+  `idf.py build`, and even after `idf.py reconfigure`** -- always
+  `rm -rf build` (not just `sdkconfig`) before testing a new Kconfig
+  combination against the real IDF image, or you'll get misleading
+  "header not found" errors that look like a real bug but aren't.
+- **`idf.py build`'s partition-size overflow check is a warning, not a
+  build failure** -- see the safety note at the top of `partitions.csv`.
+
 ## Issue tracking
 
 Deferred/"later" items (spec sections marked optional/v1.1, implementation
@@ -70,6 +102,19 @@ gcc -std=c11 -Wall -Wextra -I main main/boot_logic.c test/test_boot_logic.c -o /
 # Verify a build against the pinned ESP-IDF image without installing the toolchain locally
 docker run --rm -v "$PWD":/workspaces/launcher -w /workspaces/launcher espressif/idf:release-v5.5 \
   bash -c '. $IDF_PATH/export.sh && idf.py set-target esp32c3 && idf.py build'
+
+# Same, but testing a specific network-feature Kconfig combination (always
+# rm -rf build fresh first, see gotchas above)
+docker run --rm -v "$PWD":/workspaces/launcher -w /workspaces/launcher espressif/idf:release-v5.5 bash -c '
+  . $IDF_PATH/export.sh
+  rm -rf build sdkconfig
+  idf.py set-target esp32s3
+  cat >> sdkconfig << "EOF"
+CONFIG_LAUNCHER_NET_OTA_ENABLE=y
+CONFIG_LAUNCHER_NET_OTA_URL_BASE="http://example.local/launcher"
+EOF
+  idf.py build
+'
 ```
 
 Keep this section up to date as the project's tooling evolves — it's meant

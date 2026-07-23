@@ -21,7 +21,15 @@ menu "Bootloader Launcher Configuration"
 
         config LAUNCHER_FACTORY_SIZE
             hex "Taille de la partition factory (launcher)"
-            default 0x100000
+            default 0x180000
+            help
+                Doit correspondre a ce qui est declare dans partitions.csv.
+                0x180000 (1.5MB) plutot que le 1MB plus habituel car activer
+                LAUNCHER_NET_OTA_ENABLE + LAUNCHER_NET_VERSION_CHECK_ENABLE +
+                LAUNCHER_NET_REMOTE_CONTROL_ENABLE (BLE) en meme temps mesure
+                environ 1.25MB une fois compile (WiFi+TLS+HTTP+JSON a eux
+                seuls approchent deja 1MB, NimBLE ajoute ~250-300KB de plus).
+                Reduire si les fonctionnalites reseau ne sont pas utilisees.
 
     endmenu
 
@@ -130,12 +138,17 @@ menu "Bootloader Launcher Configuration"
         config LAUNCHER_NET_OTA_URL_BASE
             string "URL de base du serveur/manifeste OTA"
             default ""
-            depends on LAUNCHER_NET_OTA_ENABLE
+            depends on LAUNCHER_NET_OTA_ENABLE || LAUNCHER_NET_VERSION_CHECK_ENABLE
+            help
+                Le launcher va chercher le manifeste a "<URL_BASE>/manifest.json"
+                (GET, JSON -- voir README.md pour le format attendu). Les URLs de
+                telechargement de chaque binaire, elles, sont prises telles
+                quelles dans le manifeste (peuvent pointer ailleurs, ex. GitHub
+                Releases).
 
         config LAUNCHER_NET_REMOTE_CONTROL_ENABLE
             bool "Activer le controle a distance du menu"
             default n
-            select LAUNCHER_NET_WIFI_ENABLE
             help
                 Permet de declencher boot_into() depuis un transport reseau
                 (serveur HTTP embarque ou BLE) en plus de la HAL de navigation locale.
@@ -147,10 +160,25 @@ menu "Bootloader Launcher Configuration"
 
             config LAUNCHER_NET_REMOTE_TRANSPORT_HTTP
                 bool "Serveur HTTP (esp_http_server)"
+                select LAUNCHER_NET_WIFI_ENABLE
 
             config LAUNCHER_NET_REMOTE_TRANSPORT_BLE
                 bool "BLE (service GATT custom)"
                 depends on SOC_BLE_SUPPORTED
+                select BT_ENABLED
+                help
+                    Does not require CONFIG_LAUNCHER_NET_WIFI_ENABLE -- BLE works
+                    independently of the WiFi station connection.
+
+                    IMPORTANT: Kconfig's "select" cannot force a specific member
+                    of a choice (a Kconfig limitation, not a bug here -- see
+                    README.md). After picking this transport you must also go to
+                    "Component config > Bluetooth > Host" and select "NimBLE -
+                    BLE only" yourself (Bluedroid, the default, is a different
+                    API and net_remote_ble.c will not build against it). On
+                    classic ESP32 also set "Component config > Bluetooth >
+                    Controller > Mode" to "BLE Only" to avoid pulling in unused
+                    BR/EDR support.
         endchoice
 
         config LAUNCHER_NET_REMOTE_PIN
@@ -175,9 +203,26 @@ menu "Bootloader Launcher Configuration"
             bool "Activer le sous-systeme WiFi"
             default n
             help
-                Force a y automatiquement des qu'une des 3 fonctionnalites reseau
-                ci-dessus est active (voir "select" sur chacune). Credentials geres
-                via provisioning (NVS), jamais hardcodes/commits -- voir README.
+                Force a y automatiquement des que OTA, verification de version,
+                ou le controle a distance en transport HTTP est actif (voir
+                "select" sur chacun -- le transport BLE n'a lui pas besoin de WiFi).
+                Credentials geres via NVS (jamais hardcodes/commits), avec un
+                fallback de dev optionnel ci-dessous -- voir README.
+
+        config LAUNCHER_NET_WIFI_SSID
+            string "WiFi SSID (fallback dev uniquement, prefer NVS at runtime)"
+            default ""
+            depends on LAUNCHER_NET_WIFI_ENABLE
+            help
+                Utilise uniquement si aucun credential n'est deja present en NVS.
+                Mettre cette valeur dans un sdkconfig.local non commite (voir
+                .gitignore / README) plutot que de committer un SSID/password
+                reel dans sdkconfig.defaults.
+
+        config LAUNCHER_NET_WIFI_PASSWORD
+            string "WiFi password (fallback dev uniquement)"
+            default ""
+            depends on LAUNCHER_NET_WIFI_ENABLE
 
     endmenu
 

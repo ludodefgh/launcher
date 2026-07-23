@@ -15,6 +15,23 @@
 #include "ui_menu.h"
 #include "app_registry.h"
 
+#if CONFIG_LAUNCHER_NET_WIFI_ENABLE
+#include "net_wifi.h"
+#endif
+#if CONFIG_LAUNCHER_NET_OTA_ENABLE
+#include "net_ota.h"
+#endif
+#if CONFIG_LAUNCHER_NET_VERSION_CHECK_ENABLE
+#include "net_version_check.h"
+#endif
+#if CONFIG_LAUNCHER_NET_REMOTE_CONTROL_ENABLE
+#if CONFIG_LAUNCHER_NET_REMOTE_TRANSPORT_HTTP
+#include "net_remote_http.h"
+#elif CONFIG_LAUNCHER_NET_REMOTE_TRANSPORT_BLE
+#include "net_remote_ble.h"
+#endif
+#endif
+
 static const char *TAG = "launcher";
 
 /* Must match LAUNCHER_CLIENT_PROTOCOL_VERSION in components/launcher_client/launcher_client.h.
@@ -100,7 +117,32 @@ void app_main(void) {
 
     while (action == BOOT_ACTION_SHOW_MENU) {
         ESP_ERROR_CHECK(ensure_display());
+
+#if CONFIG_LAUNCHER_NET_VERSION_CHECK_ENABLE
+        display_fill_screen(DISPLAY_COLOR_BLACK);
+        display_draw_text(8, 100, "VERIF. MISES A JOUR...", DISPLAY_COLOR_WHITE, DISPLAY_COLOR_BLACK, 1);
+        net_version_check_run(); /* no-op / silently skipped if WiFi unavailable, see net_wifi.c */
+#endif
+
+#if CONFIG_LAUNCHER_NET_REMOTE_CONTROL_ENABLE
+#if CONFIG_LAUNCHER_NET_REMOTE_TRANSPORT_HTTP
+        if (net_wifi_connect()) {
+            net_remote_http_start();
+        }
+#elif CONFIG_LAUNCHER_NET_REMOTE_TRANSPORT_BLE
+        net_remote_ble_start(); /* independent of WiFi */
+#endif
+#endif
+
         int selected = ui_menu_run(drv);
+
+#if CONFIG_LAUNCHER_NET_OTA_ENABLE
+        if (selected == (int)kAppsCount) {
+            net_ota_run_download_flow(drv);
+            continue; /* redraw the menu, possibly with a freshly written slot */
+        }
+#endif
+
         const char *label = kApps[selected].partition_label;
 
         ESP_ERROR_CHECK(nvs_state_set_last_app(label));
