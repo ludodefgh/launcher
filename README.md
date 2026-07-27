@@ -16,6 +16,13 @@ rotary encoder, but the core (boot logic, HAL, Kconfig) is chip-agnostic.
   exists and the encoder button isn't held, it boots straight into it
   (`esp_ota_set_boot_partition` + `esp_restart`). Otherwise (first boot,
   forced menu, or button held) it shows a selection menu on the TFT.
+- Crash-loop failsafe: if the remembered app crashes (panic/watchdog reset)
+  within `CONFIG_LAUNCHER_CRASH_LOOP_WINDOW_MS` (default 10s) of being
+  booted, `CONFIG_LAUNCHER_CRASH_LOOP_THRESHOLD` (default 3) times in a
+  row, the launcher shows the menu instead of retrying a direct boot into
+  it — catching the case where an app crashes too fast for the user to
+  react by holding the button themselves. See issue #23 and the "Design
+  decisions" section below for exactly how the streak is tracked/reset.
 - A guest app can hand control back to the menu by calling
   `launcher_request_menu_on_next_boot()` from `components/launcher_client`
   (e.g. on a long button press) and rebooting. This sets `force_menu` in NVS
@@ -208,6 +215,32 @@ reusing/extending this repo:
   (the defaults) gives a correct, unmirrored landscape image; a different
   panel may need a different combination, adjustable via `menuconfig`
   without touching code.
+- **Crash-loop failsafe (`CONFIG_LAUNCHER_CRASH_LOOP_THRESHOLD`/`_WINDOW_MS`,
+  issue #23) diverges from that issue's own suggested direction in three
+  ways, all deliberate:**
+  - The crash-streak counter resets to 0 **only** when the user deliberately
+    reselects an app from the menu — not merely by the menu being shown
+    (e.g. a K0-long-press round trip). The issue's suggested text treated
+    any "normal reset" as clearing it; this project chose the stricter
+    reading so an incidental menu visit can't let a genuinely crash-looping
+    app dodge the failsafe. Tradeoff: the streak is effectively a lifetime
+    count since the app was last deliberately chosen, not a
+    strictly-consecutive-in-time one — a few isolated crashes spread over
+    months (each recovered from normally) will eventually trip it too.
+  - `ESP_RST_BROWNOUT` is **not** counted as an abnormal reset, though the
+    issue's suggested list included it. A brownout can come from external
+    power flakiness (weak USB cable/supply) unrelated to a bug in the app
+    itself; counting it risks forcing the menu for reasons the app can't
+    fix.
+  - Only counts as a "crash" if it happened within
+    `CONFIG_LAUNCHER_CRASH_LOOP_WINDOW_MS` (default 10s) of the launcher
+    handing control to the app, measured via `gettimeofday()` (backed by
+    ESP-IDF's default RTC-clock time source, which keeps ticking through
+    panic/watchdog resets and only resets on an actual power-on). Not in
+    the issue at all — added because the actual failure mode this guards
+    against is an app crashing before the user has any chance to react by
+    holding the button; a crash after the app ran fine for a while is
+    already recoverable that way and deliberately out of scope here.
 
 ## Network features (optional, off by default)
 

@@ -152,6 +152,40 @@ menu "Bootloader Launcher Configuration"
             string "Namespace NVS partage launcher/apps"
             default "launcher"
 
+        config LAUNCHER_CRASH_LOOP_THRESHOLD
+            int "Reboots anormaux rapides consecutifs avant retour force au menu (0 = desactive)"
+            default 3
+            help
+                Failsafe anti-crash-loop (issue #23) : si l'app en cours
+                redémarre de façon anormale (panic, watchdog -- PAS
+                brownout, qui peut venir d'une alimentation externe
+                instable sans rapport avec un bug de l'app) moins de
+                LAUNCHER_CRASH_LOOP_WINDOW_MS après que le launcher lui a
+                cédé la main, ce boot compte comme un "crash rapide". Une
+                fois ce nombre de crashs rapides consecutifs atteint, le
+                launcher affiche le menu au lieu de retenter un boot direct.
+                Le compteur ne redescend a zero que lorsque l'utilisateur
+                re-selectionne explicitement une app depuis le menu (pas
+                juste en affichant le menu, ex. retour K0) -- volontairement
+                strict pour qu'une visite incidente du menu ne masque pas un
+                probleme reel. Un crash "lent" (apres LAUNCHER_CRASH_LOOP_WINDOW_MS)
+                ne compte pas non plus : le but est de rattraper les crashs
+                trop rapides pour que l'utilisateur ait le temps de tenir le
+                bouton K0, pas les crashs plus tardifs ou l'utilisateur a
+                deja cette option. 0 desactive completement cette detection.
+
+        config LAUNCHER_CRASH_LOOP_WINDOW_MS
+            int "Fenetre de detection d'un crash rapide apres boot (ms)"
+            default 10000
+            help
+                Duree apres avoir cede la main a une app en dessous de
+                laquelle un reset anormal (panic/watchdog) compte comme un
+                "crash rapide" pour LAUNCHER_CRASH_LOOP_THRESHOLD -- voir
+                issue #23. Mesuree via l'horloge RTC (gettimeofday()), qui
+                continue de tourner a travers un reset panic/watchdog (le
+                domaine RTC reste alimente) et ne se reinitialise qu'a un
+                reset power-on reel.
+
     endmenu
 
     menu "Reseau (optionnel)"

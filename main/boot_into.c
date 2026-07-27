@@ -1,5 +1,6 @@
 #include "boot_into.h"
 #include "boot_logic.h"
+#include "nvs_state.h"
 
 #include "esp_partition.h"
 #include "esp_ota_ops.h"
@@ -33,6 +34,16 @@ esp_err_t boot_into(const char *partition_label) {
     if (err != ESP_OK) {
         ESP_LOGE(TAG, "esp_ota_set_boot_partition('%s') failed: %s", partition_label, esp_err_to_name(err));
         return err;
+    }
+
+    /* Crash-loop failsafe (issue #23): record when this attempt started so
+     * that if the app crashes fast, the next boot can tell. Best-effort --
+     * a failure here just means the next boot can't measure elapsed time
+     * (treated as "not a fast crash", see nvs_state_get_boot_attempt_elapsed_us),
+     * not worth aborting the boot over. */
+    esp_err_t mark_err = nvs_state_mark_boot_attempt_started();
+    if (mark_err != ESP_OK) {
+        ESP_LOGW(TAG, "nvs_state_mark_boot_attempt_started failed: %s", esp_err_to_name(mark_err));
     }
 
     ESP_LOGI(TAG, "booting into '%s'", partition_label);
