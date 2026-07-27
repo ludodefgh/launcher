@@ -58,14 +58,14 @@ static void draw_row(int i, bool is_selected) {
         const char *update_suffix = "";
 #if CONFIG_LAUNCHER_NET_VERSION_CHECK_ENABLE
         if (net_version_check_has_update(kApps[i].partition_label)) {
-            update_suffix = " (MAJ)";
+            update_suffix = " (UPD)";
         }
 #endif
         char name_buf[NVS_STATE_SLOT_NAME_LEN];
         const char *display_name = app_registry_resolve_label(i, name_buf, sizeof(name_buf));
         char version_suffix[APP_REGISTRY_VERSION_SUFFIX_LEN];
         app_registry_format_version_suffix(i, version_suffix, sizeof(version_suffix));
-        const char *empty_suffix = app_registry_slot_is_flashed(i) ? "" : " (vide)";
+        const char *empty_suffix = app_registry_slot_is_flashed(i) ? "" : " (empty)";
         /* %.20s: display_name's real bound (NVS_STATE_SLOT_NAME_LEN) isn't
          * visible to the compiler through the function-return pointer --
          * cap explicitly so this is statically safe under
@@ -74,7 +74,7 @@ static void draw_row(int i, bool is_selected) {
         snprintf(line, sizeof(line), "%c %.20s%s%s%s", is_selected ? '>' : ' ', display_name, version_suffix,
                  empty_suffix, update_suffix);
     } else {
-        snprintf(line, sizeof(line), "%c Telecharger un programme", is_selected ? '>' : ' ');
+        snprintf(line, sizeof(line), "%c Download a program", is_selected ? '>' : ' ');
     }
     display_draw_text(MARGIN_X, y, line, fg, bg, ENTRY_SCALE);
 }
@@ -95,7 +95,7 @@ static void draw_footer(void) {
  * flow's screens, ...) so this can't be skipped, unlike per-detent updates. */
 static void draw_menu_full(int selected) {
     display_fill_screen(DISPLAY_COLOR_BLACK);
-    display_draw_text(MARGIN_X, TITLE_Y, "SELECTION PROGRAMME", DISPLAY_COLOR_WHITE, DISPLAY_COLOR_BLACK, TITLE_SCALE);
+    display_draw_text(MARGIN_X, TITLE_Y, "SELECT PROGRAM", DISPLAY_COLOR_WHITE, DISPLAY_COLOR_BLACK, TITLE_SCALE);
 
     int rows = total_row_count();
     for (int i = 0; i < rows; i++) {

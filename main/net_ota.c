@@ -111,7 +111,7 @@ static int run_picker(const nav_input_driver_t *drv, const char *title, const ch
 /* Blocking yes/no confirm. NAV_EVENT_SELECT = yes, NAV_EVENT_LONG_PRESS = no. */
 static bool run_confirm(const nav_input_driver_t *drv, const char *line1, const char *line2) {
     show_message(line1, line2);
-    display_draw_text(MARGIN_X, 150, "SELECT=OUI  APPUI LONG=ANNULER", DISPLAY_COLOR_WHITE, DISPLAY_COLOR_BLACK, 1);
+    display_draw_text(MARGIN_X, 150, "SELECT=YES  LONG PRESS=CANCEL", DISPLAY_COLOR_WHITE, DISPLAY_COLOR_BLACK, 1);
 
     s_evt_queue = xQueueCreate(4, sizeof(nav_event_t));
     drv->set_callback(nav_cb);
@@ -229,17 +229,17 @@ static esp_err_t download_to_partition(const net_manifest_entry_t *entry, const 
 }
 
 void net_ota_run_download_flow(const nav_input_driver_t *drv) {
-    show_message("CONNEXION WIFI...", NULL);
+    show_message("CONNECTING WIFI...", NULL);
     if (!net_wifi_connect()) {
-        show_message("ECHEC WIFI", "reseau indisponible");
+        show_message("WIFI FAILED", "network unavailable");
         vTaskDelay(pdMS_TO_TICKS(2000));
         return;
     }
 
-    show_message("CHARGEMENT MANIFESTE...", NULL);
+    show_message("LOADING MANIFEST...", NULL);
     net_manifest_t manifest;
     if (net_manifest_fetch(&manifest) != ESP_OK || manifest.count == 0) {
-        show_message("ECHEC MANIFESTE", "verifier LAUNCHER_NET_OTA_URL_BASE");
+        show_message("MANIFEST FAILED", "check LAUNCHER_NET_OTA_URL_BASE");
         vTaskDelay(pdMS_TO_TICKS(2000));
         return;
     }
@@ -263,14 +263,14 @@ void net_ota_run_download_flow(const nav_input_driver_t *drv) {
         }
         app_labels[i] = app_label_bufs[i];
     }
-    int app_idx = run_picker(drv, "CHOISIR PROGRAMME", app_labels, (int)manifest.count);
+    int app_idx = run_picker(drv, "CHOOSE PROGRAM", app_labels, (int)manifest.count);
     if (app_idx < 0) {
         return; /* cancelled */
     }
 
     /* Overwriting a slot that already has something flashed is more
      * consequential than just looking at the main menu, so this picker
-     * spells out "(occupe)" vs "(vide)" explicitly -- see issue #22
+     * spells out "(used)" vs "(empty)" explicitly -- see issue #22
      * comment. Uses app_registry_slot_is_flashed() (a boolean check), not
      * the image's own project_name, for the same reason as the main menu.
      * Version suffix uses the exact same app_registry_format_version_suffix()
@@ -284,7 +284,7 @@ void net_ota_run_download_flow(const nav_input_driver_t *drv) {
         const char *base_name = app_registry_resolve_label(i, name_buf, sizeof(name_buf));
         char version_suffix[APP_REGISTRY_VERSION_SUFFIX_LEN];
         app_registry_format_version_suffix(i, version_suffix, sizeof(version_suffix));
-        const char *status = app_registry_slot_is_flashed(i) ? " (occupe)" : " (vide)";
+        const char *status = app_registry_slot_is_flashed(i) ? " (used)" : " (empty)";
         /* %.20s: matches ui_menu.c's draw_row() cap on the same
          * app_registry_resolve_label() return, both for
          * -Wformat-truncation safety and so the two screens truncate a
@@ -292,7 +292,7 @@ void net_ota_run_download_flow(const nav_input_driver_t *drv) {
         snprintf(slot_label_bufs[i], sizeof(slot_label_bufs[i]), "%.20s%s%s", base_name, version_suffix, status);
         slot_labels[i] = slot_label_bufs[i];
     }
-    int slot_idx = run_picker(drv, "CHOISIR SLOT CIBLE", slot_labels, (int)slot_count);
+    int slot_idx = run_picker(drv, "CHOOSE TARGET SLOT", slot_labels, (int)slot_count);
     if (slot_idx < 0) {
         return; /* cancelled */
     }
@@ -302,19 +302,19 @@ void net_ota_run_download_flow(const nav_input_driver_t *drv) {
 
     char confirm_line[48];
     snprintf(confirm_line, sizeof(confirm_line), "%.20s -> %.16s", entry->name, dest_slot->display_name);
-    if (!run_confirm(drv, "ECRASER CE SLOT ?", confirm_line)) {
+    if (!run_confirm(drv, "OVERWRITE THIS SLOT?", confirm_line)) {
         return; /* cancelled */
     }
 
     const esp_partition_t *dest =
         esp_partition_find_first(ESP_PARTITION_TYPE_APP, ESP_PARTITION_SUBTYPE_ANY, dest_slot->partition_label);
     if (dest == NULL) {
-        show_message("ERREUR", "partition cible introuvable");
+        show_message("ERROR", "target partition not found");
         vTaskDelay(pdMS_TO_TICKS(2000));
         return;
     }
 
-    show_message("TELECHARGEMENT...", "0 KB...");
+    show_message("DOWNLOADING...", "0 KB...");
     esp_err_t err = download_to_partition(entry, dest);
     if (err == ESP_OK) {
         /* Record the manifest's own name for this slot now, while we still
@@ -329,9 +329,9 @@ void net_ota_run_download_flow(const nav_input_driver_t *drv) {
         if (name_err != ESP_OK) {
             ESP_LOGW(TAG, "nvs_state_set_slot_name(%d) failed: %s", slot_idx, esp_err_to_name(name_err));
         }
-        show_message("TERMINE", "retour au menu...");
+        show_message("DONE", "returning to menu...");
     } else {
-        show_message("ECHEC TELECHARGEMENT", esp_err_to_name(err));
+        show_message("DOWNLOAD FAILED", esp_err_to_name(err));
     }
     vTaskDelay(pdMS_TO_TICKS(1500));
 }
