@@ -3,6 +3,8 @@
 #include "nvs_flash.h"
 #include "nvs.h"
 #include "esp_system.h"
+#include "esp_partition.h"
+#include "esp_ota_ops.h"
 #include "esp_log.h"
 
 static const char *TAG = "launcher_client";
@@ -38,7 +40,29 @@ esp_err_t launcher_request_menu_on_next_boot(void) {
         return err;
     }
 
-    ESP_LOGI(TAG, "force_menu set, restarting into launcher menu");
+    /*
+     * Writing force_menu alone is not enough: once otadata has been
+     * written even once (i.e. as soon as any guest app has ever been
+     * booted), the 2nd-stage bootloader boots straight from whatever
+     * otadata points to and never falls back to checking "factory" on its
+     * own -- the launcher's app_main() (and therefore the code that reads
+     * force_menu) simply never runs again otherwise. Point the next boot
+     * back at "factory" explicitly, the same way main/boot_into.c points
+     * it at a guest slot when switching the other direction.
+     */
+    const esp_partition_t *factory =
+        esp_partition_find_first(ESP_PARTITION_TYPE_APP, ESP_PARTITION_SUBTYPE_APP_FACTORY, NULL);
+    if (factory == NULL) {
+        ESP_LOGE(TAG, "factory partition not found -- can't return to launcher");
+        return ESP_ERR_NOT_FOUND;
+    }
+    err = esp_ota_set_boot_partition(factory);
+    if (err != ESP_OK) {
+        ESP_LOGE(TAG, "esp_ota_set_boot_partition(factory) failed: %s", esp_err_to_name(err));
+        return err;
+    }
+
+    ESP_LOGI(TAG, "force_menu set, boot partition set to factory, restarting into launcher menu");
     esp_restart();
     return ESP_OK; /* unreachable */
 }

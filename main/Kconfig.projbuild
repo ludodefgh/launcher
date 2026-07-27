@@ -111,6 +111,31 @@ menu "Bootloader Launcher Configuration"
             int "Hauteur ecran (px)"
             default 240
 
+        config LAUNCHER_DISPLAY_SWAP_XY
+            bool "Inverser lignes/colonnes (swap_xy)"
+            default y
+            help
+                La plupart des modules ST7789 2.4" de ce type sont nativement
+                portrait (240x320) -- ce swap est necessaire pour obtenir une
+                image paysage (320x240) correcte. Equivalent au setRotation()
+                de TFT_eSPI. Si le menu apparait tourne de 90 degres, essayer
+                de basculer cette option.
+
+        config LAUNCHER_DISPLAY_MIRROR_X
+            bool "Miroir horizontal"
+            default n
+            help
+                A ajuster au cas par cas selon le montage physique du panel --
+                impossible a determiner sans le hardware en main. Si l'image
+                est correctement orientee apres LAUNCHER_DISPLAY_SWAP_XY mais
+                inversee horizontalement, activer cette option.
+
+        config LAUNCHER_DISPLAY_MIRROR_Y
+            bool "Miroir vertical"
+            default n
+            help
+                Comme LAUNCHER_DISPLAY_MIRROR_X mais pour l'axe vertical.
+
     endmenu
 
     menu "Comportement au boot"

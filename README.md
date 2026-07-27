@@ -18,7 +18,14 @@ rotary encoder, but the core (boot logic, HAL, Kconfig) is chip-agnostic.
   forced menu, or button held) it shows a selection menu on the TFT.
 - A guest app can hand control back to the menu by calling
   `launcher_request_menu_on_next_boot()` from `components/launcher_client`
-  (e.g. on a long button press) and rebooting.
+  (e.g. on a long button press) and rebooting. This sets `force_menu` in NVS
+  **and** points the boot partition back at `factory` before restarting —
+  both are required: once otadata has ever been written (i.e. as soon as
+  any guest app has booted at all), the 2nd-stage bootloader boots straight
+  from whatever otadata points to and never falls back to `factory` on its
+  own, so without the boot-partition switch the launcher's own `app_main()`
+  (and therefore the code that reads `force_menu`) would simply never run
+  again. Found on real hardware, see closed issue #12.
 
 This is the same standard ESP-IDF OTA-partition mechanism used by 2-slot
 OTA updates, just with N *different programs* instead of 2 versions of the
@@ -190,6 +197,15 @@ reusing/extending this repo:
   `#ifndef ... #define ... 0 #endif` fallback. Done for
   `CONFIG_LAUNCHER_EC11_INVERT` in `main/nav_input_ec11.c`; keep this in
   mind if you add more bool-driven runtime behavior.
+- **Display orientation (`CONFIG_LAUNCHER_DISPLAY_SWAP_XY`/`_MIRROR_X`/
+  `_MIRROR_Y`) is a Kconfig option, not hardcoded.** Found on real hardware
+  (issue #13): a 2.4" ST7789 module is natively portrait, so
+  `esp_lcd_panel_swap_xy()` is needed to get the landscape image this
+  driver assumes (`swap_xy` defaults to `y`); whether mirroring is also
+  needed depends on the specific panel's physical mounting and can't be
+  determined without hardware in hand, so those default to `n` and are
+  meant to be adjusted via `menuconfig` — same reasoning as
+  `CONFIG_LAUNCHER_EC11_INVERT` for the encoder.
 
 ## Network features (optional, off by default)
 

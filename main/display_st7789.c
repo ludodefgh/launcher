@@ -27,6 +27,21 @@ static const char *TAG = "display";
 #define DISPLAY_HEIGHT     CONFIG_LAUNCHER_DISPLAY_HEIGHT
 #define DISPLAY_GPIO_BL    CONFIG_LAUNCHER_DISPLAY_GPIO_BL
 
+/* ESP-IDF/Kconfig only emits a #define for a bool option when it is "y" --
+ * when "n", the symbol is absent from sdkconfig.h entirely rather than
+ * defined as 0 (see CLAUDE.md gotchas). These are read as plain C
+ * expressions below (esp_lcd_panel_swap_xy/mirror args), not just inside
+ * #if, so provide 0 fallbacks explicitly for whichever default to "n". */
+#ifndef CONFIG_LAUNCHER_DISPLAY_SWAP_XY
+#define CONFIG_LAUNCHER_DISPLAY_SWAP_XY 0
+#endif
+#ifndef CONFIG_LAUNCHER_DISPLAY_MIRROR_X
+#define CONFIG_LAUNCHER_DISPLAY_MIRROR_X 0
+#endif
+#ifndef CONFIG_LAUNCHER_DISPLAY_MIRROR_Y
+#define CONFIG_LAUNCHER_DISPLAY_MIRROR_Y 0
+#endif
+
 static esp_lcd_panel_handle_t s_panel;
 static uint16_t s_line_buf[DISPLAY_WIDTH];
 
@@ -94,6 +109,13 @@ esp_err_t display_init(void) {
     ESP_ERROR_CHECK(esp_lcd_panel_reset(s_panel));
     ESP_ERROR_CHECK(esp_lcd_panel_init(s_panel));
     ESP_ERROR_CHECK(esp_lcd_panel_invert_color(s_panel, true));
+    /* Most 2.4" ST7789 modules are natively portrait (240x320); swap_xy is
+     * what actually produces the landscape (WIDTHxHEIGHT) image this driver
+     * assumes -- see CONFIG_LAUNCHER_DISPLAY_SWAP_XY. mirror_x/y are
+     * board-specific and can't be determined without the physical panel in
+     * hand, adjust via menuconfig if the image comes out flipped. */
+    ESP_ERROR_CHECK(esp_lcd_panel_swap_xy(s_panel, CONFIG_LAUNCHER_DISPLAY_SWAP_XY));
+    ESP_ERROR_CHECK(esp_lcd_panel_mirror(s_panel, CONFIG_LAUNCHER_DISPLAY_MIRROR_X, CONFIG_LAUNCHER_DISPLAY_MIRROR_Y));
     ESP_ERROR_CHECK(esp_lcd_panel_disp_on_off(s_panel, true));
 
     if (DISPLAY_GPIO_BL >= 0) {
