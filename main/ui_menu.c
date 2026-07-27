@@ -1,6 +1,7 @@
 #include "ui_menu.h"
 #include "app_registry.h"
 #include "display.h"
+#include "nvs_state.h"
 #include "sdkconfig.h"
 
 #if CONFIG_LAUNCHER_NET_VERSION_CHECK_ENABLE
@@ -60,8 +61,10 @@ static void draw_row(int i, bool is_selected) {
             update_suffix = " (MAJ)";
         }
 #endif
+        char name_buf[NVS_STATE_SLOT_NAME_LEN];
+        const char *display_name = app_registry_resolve_label(i, name_buf, sizeof(name_buf));
         const char *empty_suffix = app_registry_slot_is_flashed(i) ? "" : " (vide)";
-        snprintf(line, sizeof(line), "%c %s%s%s", is_selected ? '>' : ' ', kApps[i].display_name, empty_suffix,
+        snprintf(line, sizeof(line), "%c %s%s%s", is_selected ? '>' : ' ', display_name, empty_suffix,
                  update_suffix);
     } else {
         snprintf(line, sizeof(line), "%c Telecharger un programme", is_selected ? '>' : ' ');

@@ -3,6 +3,7 @@
 #include "net_wifi.h"
 #include "display.h"
 #include "app_registry.h"
+#include "nvs_state.h"
 
 #include <string.h>
 #include <stdio.h>
@@ -262,8 +263,10 @@ void net_ota_run_download_flow(const nav_input_driver_t *drv) {
     const char *slot_labels[64];
     size_t slot_count = kAppsCount < 64 ? kAppsCount : 64;
     for (size_t i = 0; i < slot_count; i++) {
+        char name_buf[NVS_STATE_SLOT_NAME_LEN];
+        const char *base_name = app_registry_resolve_label(i, name_buf, sizeof(name_buf));
         const char *status = app_registry_slot_is_flashed(i) ? " (occupe)" : " (vide)";
-        snprintf(slot_label_bufs[i], sizeof(slot_label_bufs[i]), "%s%s", kApps[i].display_name, status);
+        snprintf(slot_label_bufs[i], sizeof(slot_label_bufs[i]), "%s%s", base_name, status);
         slot_labels[i] = slot_label_bufs[i];
     }
     int slot_idx = run_picker(drv, "CHOISIR SLOT CIBLE", slot_labels, (int)slot_count);
@@ -291,6 +294,18 @@ void net_ota_run_download_flow(const nav_input_driver_t *drv) {
     show_message("TELECHARGEMENT...", "0 KB...");
     esp_err_t err = download_to_partition(entry, dest);
     if (err == ESP_OK) {
+        /* Record the manifest's own name for this slot now, while we still
+         * have it -- lets the menu show a meaningful label afterward
+         * without ever having to trust anything read out of the flashed
+         * image itself (see app_registry_resolve_label(), issue #22
+         * comment). Best-effort: a failure here just means the menu falls
+         * back to the static app_registry.h label, not worth failing the
+         * whole download over. */
+        const char *chosen_name = entry->name[0] != '\0' ? entry->name : entry->url;
+        esp_err_t name_err = nvs_state_set_slot_name((size_t)slot_idx, chosen_name);
+        if (name_err != ESP_OK) {
+            ESP_LOGW(TAG, "nvs_state_set_slot_name(%d) failed: %s", slot_idx, esp_err_to_name(name_err));
+        }
         show_message("TERMINE", "retour au menu...");
     } else {
         show_message("ECHEC TELECHARGEMENT", esp_err_to_name(err));

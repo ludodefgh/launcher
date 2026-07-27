@@ -241,6 +241,27 @@ reusing/extending this repo:
     against is an app crashing before the user has any chance to react by
     holding the button; a crash after the app ran fine for a while is
     already recoverable that way and deliberately out of scope here.
+- **App-slot menu labels never read a name out of the flashed image itself
+  (issue #22).** A first attempt used `esp_app_desc_t.project_name` via
+  `esp_ota_get_partition_description()`, but real-hardware testing showed
+  it's meaningless for PlatformIO/Arduino-framework guests — it holds that
+  framework's own internal build project name (e.g.
+  `"arduino-lib-builder"`), never the guest sketch's actual name, since
+  that field is populated by whatever build system produced the image, not
+  something the launcher controls. Final approach: `app_registry.c`'s
+  static `kApps[i].display_name` is always the label text; a slot's *empty
+  vs. flashed* state is a separate boolean check
+  (`app_registry_slot_is_flashed()`, still via
+  `esp_ota_get_partition_description()`, just ignoring its `project_name`
+  field), and for OTA-downloaded slots specifically, the real name comes
+  from the OTA manifest entry's own `name` field, captured by `net_ota.c`
+  into NVS (`nvs_state_set_slot_name()`) at the moment a download succeeds
+  — the launcher already knows this name before it ever touches the
+  binary, so it's guest-agnostic and build-system-agnostic. Tradeoff: if a
+  slot is later reflashed by some means outside the launcher's own OTA
+  flow, the recorded name can go stale (there's nothing in the image to
+  cross-check it against, by design) until the next OTA download to that
+  slot overwrites it again.
 
 ## Network features (optional, off by default)
 

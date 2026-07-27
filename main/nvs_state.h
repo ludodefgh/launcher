@@ -52,6 +52,29 @@ esp_err_t nvs_state_get_boot_attempt_elapsed_us(int64_t *out_elapsed_us, bool *o
 esp_err_t nvs_state_get_crash_streak(uint32_t *out_streak);
 esp_err_t nvs_state_set_crash_streak(uint32_t streak);
 
+/* Sized to comfortably hold a net_manifest_entry_t.name (NET_MANIFEST_NAME_LEN,
+ * currently 64) -- duplicated rather than shared via a header include since
+ * nvs_state.c/h must build unconditionally, while net_manifest.h only
+ * compiles in when OTA/version-check networking is enabled. Keep >= that
+ * value if it ever changes. */
+#define NVS_STATE_SLOT_NAME_LEN 64
+/* Matches CONFIG_LAUNCHER_APP_SLOT_COUNT's Kconfig range (1-8, see
+ * Kconfig.projbuild) -- slot_index beyond this is rejected rather than
+ * silently truncated/aliased. */
+#define NVS_STATE_MAX_APP_SLOTS 8
+
+/* Per-slot app name, keyed by slot index (not partition label -- keeps NVS
+ * key length bounded regardless of BOOT_LOGIC_MAX_LABEL_LEN). Recorded by
+ * net_ota.c from the OTA manifest entry's own name at the moment a download
+ * to that slot succeeds -- never read out of the flashed image itself, so
+ * it isn't subject to esp_app_desc_t.project_name's unreliability for
+ * non-ESP-IDF-native build systems (see issue #22 comment). *out_found is
+ * false if this slot was never OTA-downloaded through the launcher (e.g. a
+ * factory-flashed slot, or a slot reflashed by some other means) -- callers
+ * fall back to the static app_registry.h label in that case. */
+esp_err_t nvs_state_get_slot_name(size_t slot_index, char *out_name, size_t out_name_size, bool *out_found);
+esp_err_t nvs_state_set_slot_name(size_t slot_index, const char *name);
+
 #ifdef __cplusplus
 }
 #endif
