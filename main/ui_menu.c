@@ -37,7 +37,7 @@ static void menu_nav_cb(nav_event_t event) {
 }
 
 static int total_row_count(void) {
-    return (int)kAppsCount + EXTRA_ROW_COUNT;
+    return (int)app_registry_count() + EXTRA_ROW_COUNT;
 }
 
 /* Redraws a single row in either its selected or unselected appearance.
@@ -54,10 +54,10 @@ static void draw_row(int i, bool is_selected) {
     display_fill_rect(0, y - 2, display_width(), ROW_HEIGHT, bg);
 
     char line[64];
-    if (i < (int)kAppsCount) {
+    if (i < (int)app_registry_count()) {
         const char *update_suffix = "";
 #if CONFIG_LAUNCHER_NET_VERSION_CHECK_ENABLE
-        if (net_version_check_has_update(kApps[i].partition_label)) {
+        if (net_version_check_has_update(app_registry_partition_label(i))) {
             update_suffix = " (UPD)";
         }
 #endif

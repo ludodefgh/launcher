@@ -7,44 +7,60 @@
 extern "C" {
 #endif
 
-typedef struct {
-    const char *display_name;
-    const char *partition_label; /* must match the "Name" column in partitions.csv */
-} launcher_app_entry_t;
+/* Builds the app-slot registry from the actual partition table at boot --
+ * enumerates every ESP_PARTITION_TYPE_APP partition with a subtype in the
+ * OTA range (ESP_PARTITION_SUBTYPE_APP_OTA_MIN..MAX), sorted by subtype for
+ * deterministic (ota_0, ota_1, ...) ordering. Sorting is required, not just
+ * defensive: verified against the actual ESP-IDF v5.5 esp_partition.c
+ * source that esp_partition_find()'s own iteration order is NOT partition
+ * table declaration order (its internal list is built via
+ * SLIST_INSERT_HEAD, so iteration comes back reversed).
+ *
+ * Replaces the old hand-typed kApps[] static array (issue #24) --
+ * partitions.csv is now the only place slot identity is declared; nothing
+ * left to drift out of sync with it, and nothing to hand-edit when reusing
+ * this launcher in a new project.
+ *
+ * Call once, early in app_main(), before any other function in this module
+ * is used. Capped at NVS_STATE_MAX_APP_SLOTS entries -- logs a warning
+ * (does not block boot) if the partition table has more OTA slots than
+ * that; the excess are simply not registered. */
+void app_registry_init(void);
 
-/* Static slot registry for this project. A new project reusing the launcher
- * edits this array (and partitions.csv) to match its own slots -- see
- * README.md. Keep kAppsCount in sync with CONFIG_LAUNCHER_APP_SLOT_COUNT;
- * a mismatch is logged as a warning at boot (see boot_logic_slot_count_matches).
- * display_name is the maintainer-provided label shown as-is; it deliberately
- * does NOT bake in an empty/occupied qualifier -- see
- * app_registry_slot_is_flashed(), issue #22. */
-extern const launcher_app_entry_t kApps[];
-extern const size_t kAppsCount;
+/* Number of app slots found at app_registry_init() time. */
+size_t app_registry_count(void);
+
+/* Raw partition label for slot i (e.g. "app_slot1"), taken directly from
+ * the partition table -- use for esp_partition_find_first(),
+ * esp_ota_set_boot_partition(), NVS keys, etc. Empty string if i is out of
+ * range; callers generally only need to guard with i < app_registry_count(). */
+const char *app_registry_partition_label(size_t i);
 
 /* True if slot i's partition actually contains a valid flashed app image,
  * checked via esp_ota_get_partition_description() succeeding -- NOT via
  * that descriptor's project_name field, which is unreliable as display text
  * (PlatformIO's Arduino-as-ESP-IDF-component framework populates it with
  * its own internal build-system name, e.g. "arduino-lib-builder", never the
- * guest sketch's actual name -- see issue #22 comment). Callers combine
- * this with kApps[i].display_name to show/hide an empty-slot qualifier
- * without trusting anything inside the flashed image itself. */
+ * guest sketch's actual name -- see issue #22 comment). */
 bool app_registry_slot_is_flashed(size_t i);
 
 /* Resolves the display label for slot i: prefers the name recorded by
  * net_ota.c when an OTA download last wrote into this slot (captured from
  * the OTA manifest at download time -- see nvs_state_set_slot_name()) over
- * the static kApps[i].display_name placeholder. Falls back to the static
- * label for factory-flashed slots (never went through the launcher's OTA
- * flow) or if nothing was ever recorded. buf/buf_len are scratch space
- * (>= NVS_STATE_SLOT_NAME_LEN) owned by the caller; the returned pointer
- * may point into buf or directly at kApps[i].display_name -- consume it
- * before reusing buf for anything else. Note: if a slot is OTA-downloaded
- * once and later reflashed by some means outside the launcher's OTA flow,
- * the recorded name can go stale (there is nothing in the flashed image
- * itself this can be cross-checked against, by design -- see issue #22
- * comment on why project_name isn't trustworthy). */
+ * the raw partition label. Falls back to the raw partition label (e.g.
+ * "app_slot2") for slots that were never OTA-downloaded through the
+ * launcher -- issue #24 traded the old hand-typed placeholder name for
+ * this, so a factory-flashed slot shows an unstyled label until its first
+ * OTA download (a friendlier fallback would need a "rename slot" menu
+ * action, tracked as a possible follow-up, not needed here).
+ *
+ * buf/buf_len are scratch space (>= NVS_STATE_SLOT_NAME_LEN) owned by the
+ * caller; the returned pointer may point into buf or directly at the
+ * internal registry -- consume it before reusing buf for anything else.
+ * Note: if a slot is OTA-downloaded once and later reflashed by some means
+ * outside the launcher's OTA flow, the recorded name can go stale (there is
+ * nothing in the flashed image itself this can be cross-checked against, by
+ * design -- see issue #22 comment on why project_name isn't trustworthy). */
 const char *app_registry_resolve_label(size_t i, char *buf, size_t buf_len);
 
 /* Matches esp_app_desc_t.version's field size (see esp_app_format.h). */

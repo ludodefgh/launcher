@@ -158,7 +158,7 @@ void app_main(void) {
     const nav_input_driver_t *drv = nav_input_get_active_driver();
     ESP_ERROR_CHECK(drv->init());
 
-    boot_check_slot_count_consistency();
+    app_registry_init();
 
     boot_decision_input_t decision_input = {0};
     bool found_last_app = false;
@@ -207,19 +207,21 @@ void app_main(void) {
         int selected = ui_menu_run(drv);
 
 #if CONFIG_LAUNCHER_NET_OTA_ENABLE
-        if (selected == (int)kAppsCount) {
+        if (selected == (int)app_registry_count()) {
             run_on_network_task(run_ota_flow, (void *)drv);
             continue; /* redraw the menu, possibly with a freshly written slot */
         }
 #endif
 
-        const char *label = kApps[selected].partition_label;
+        const char *label = app_registry_partition_label((size_t)selected);
 
         ESP_ERROR_CHECK(nvs_state_set_last_app(label));
 
         esp_err_t err = boot_into(label);
         /* Only reached on failure -- stay in the menu instead of crash-looping. */
         ESP_LOGW(TAG, "boot into '%s' failed (%s)", label, esp_err_to_name(err));
-        show_error_and_wait(kApps[selected].display_name, "appears empty/not flashed.");
+        char name_buf[NVS_STATE_SLOT_NAME_LEN];
+        const char *display_name = app_registry_resolve_label((size_t)selected, name_buf, sizeof(name_buf));
+        show_error_and_wait(display_name, "appears empty/not flashed.");
     }
 }

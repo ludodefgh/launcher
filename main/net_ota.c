@@ -276,9 +276,9 @@ void net_ota_run_download_flow(const nav_input_driver_t *drv) {
      * Version suffix uses the exact same app_registry_format_version_suffix()
      * as ui_menu.c's main menu, so this picker and the main menu are
      * guaranteed to show the same thing for the same slot. */
-    static char slot_label_bufs[64][56];
-    const char *slot_labels[64];
-    size_t slot_count = kAppsCount < 64 ? kAppsCount : 64;
+    static char slot_label_bufs[NVS_STATE_MAX_APP_SLOTS][56];
+    const char *slot_labels[NVS_STATE_MAX_APP_SLOTS];
+    size_t slot_count = app_registry_count();
     for (size_t i = 0; i < slot_count; i++) {
         char name_buf[NVS_STATE_SLOT_NAME_LEN];
         const char *base_name = app_registry_resolve_label(i, name_buf, sizeof(name_buf));
@@ -298,16 +298,18 @@ void net_ota_run_download_flow(const nav_input_driver_t *drv) {
     }
 
     const net_manifest_entry_t *entry = &manifest.entries[app_idx];
-    const launcher_app_entry_t *dest_slot = &kApps[slot_idx];
+    const char *dest_label = app_registry_partition_label((size_t)slot_idx);
+    char dest_name_buf[NVS_STATE_SLOT_NAME_LEN];
+    const char *dest_name = app_registry_resolve_label((size_t)slot_idx, dest_name_buf, sizeof(dest_name_buf));
 
     char confirm_line[48];
-    snprintf(confirm_line, sizeof(confirm_line), "%.20s -> %.16s", entry->name, dest_slot->display_name);
+    snprintf(confirm_line, sizeof(confirm_line), "%.20s -> %.16s", entry->name, dest_name);
     if (!run_confirm(drv, "OVERWRITE THIS SLOT?", confirm_line)) {
         return; /* cancelled */
     }
 
     const esp_partition_t *dest =
-        esp_partition_find_first(ESP_PARTITION_TYPE_APP, ESP_PARTITION_SUBTYPE_ANY, dest_slot->partition_label);
+        esp_partition_find_first(ESP_PARTITION_TYPE_APP, ESP_PARTITION_SUBTYPE_ANY, dest_label);
     if (dest == NULL) {
         show_message("ERROR", "target partition not found");
         vTaskDelay(pdMS_TO_TICKS(2000));

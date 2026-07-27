@@ -2,44 +2,107 @@
 #include "nvs_state.h"
 
 #include <stdio.h>
+#include "esp_log.h"
 #include "esp_ota_ops.h"
 #include "esp_partition.h"
 
-const launcher_app_entry_t kApps[] = {
-    {"ASCII Aquarium", "app_slot1"},
-    {"Slot 2", "app_slot2"},
-    {"Slot 3", "app_slot3"},
-};
+static const char *TAG = "app_registry";
 
-const size_t kAppsCount = sizeof(kApps) / sizeof(kApps[0]);
+#define APP_REGISTRY_MAX_SLOTS NVS_STATE_MAX_APP_SLOTS
+
+static char s_partition_labels[APP_REGISTRY_MAX_SLOTS][sizeof(((esp_partition_t *)0)->label)];
+static size_t s_count;
+
+void app_registry_init(void) {
+    s_count = 0;
+
+    /* esp_partition_find()'s iteration order is not partition table
+     * declaration order (its internal list is built via
+     * SLIST_INSERT_HEAD, so iteration comes back reversed) -- collect
+     * matching partitions first, then sort by subtype below for
+     * deterministic (ota_0, ota_1, ...) slot ordering. */
+    const esp_partition_t *found[APP_REGISTRY_MAX_SLOTS];
+    size_t found_count = 0;
+    int total_ota_slots = 0;
+
+    esp_partition_iterator_t it = esp_partition_find(ESP_PARTITION_TYPE_APP, ESP_PARTITION_SUBTYPE_ANY, NULL);
+    while (it != NULL) {
+        const esp_partition_t *part = esp_partition_get(it);
+        if (part->subtype >= ESP_PARTITION_SUBTYPE_APP_OTA_MIN && part->subtype < ESP_PARTITION_SUBTYPE_APP_OTA_MAX) {
+            total_ota_slots++;
+            if (found_count < APP_REGISTRY_MAX_SLOTS) {
+                found[found_count++] = part;
+            }
+        }
+        it = esp_partition_next(it);
+    }
+    esp_partition_iterator_release(it);
+
+    if (total_ota_slots > (int)APP_REGISTRY_MAX_SLOTS) {
+        ESP_LOGW(TAG,
+                 "partition table has %d ota_* slot(s), only the first %d (by subtype) are usable -- "
+                 "see NVS_STATE_MAX_APP_SLOTS",
+                 total_ota_slots, (int)APP_REGISTRY_MAX_SLOTS);
+    }
+
+    /* Insertion sort by subtype -- found_count is small (<= 8), not worth
+     * pulling in qsort() for this. */
+    for (size_t i = 1; i < found_count; i++) {
+        const esp_partition_t *key = found[i];
+        size_t j = i;
+        while (j > 0 && found[j - 1]->subtype > key->subtype) {
+            found[j] = found[j - 1];
+            j--;
+        }
+        found[j] = key;
+    }
+
+    for (size_t i = 0; i < found_count; i++) {
+        snprintf(s_partition_labels[i], sizeof(s_partition_labels[i]), "%s", found[i]->label);
+    }
+    s_count = found_count;
+
+    ESP_LOGI(TAG, "found %u app slot(s) in the partition table", (unsigned)s_count);
+}
+
+size_t app_registry_count(void) {
+    return s_count;
+}
+
+const char *app_registry_partition_label(size_t i) {
+    if (i >= s_count) {
+        return "";
+    }
+    return s_partition_labels[i];
+}
 
 bool app_registry_slot_is_flashed(size_t i) {
-    if (i >= kAppsCount) {
+    if (i >= s_count) {
         return false;
     }
     const esp_partition_t *part =
-        esp_partition_find_first(ESP_PARTITION_TYPE_APP, ESP_PARTITION_SUBTYPE_ANY, kApps[i].partition_label);
+        esp_partition_find_first(ESP_PARTITION_TYPE_APP, ESP_PARTITION_SUBTYPE_ANY, s_partition_labels[i]);
     esp_app_desc_t desc;
     return part != NULL && esp_ota_get_partition_description(part, &desc) == ESP_OK;
 }
 
 const char *app_registry_resolve_label(size_t i, char *buf, size_t buf_len) {
-    if (i >= kAppsCount) {
+    if (i >= s_count) {
         return "";
     }
     bool found = false;
     if (nvs_state_get_slot_name(i, buf, buf_len, &found) == ESP_OK && found && buf[0] != '\0') {
         return buf;
     }
-    return kApps[i].display_name;
+    return s_partition_labels[i];
 }
 
 bool app_registry_get_version(size_t i, char *out_version, size_t out_version_len) {
-    if (i >= kAppsCount) {
+    if (i >= s_count) {
         return false;
     }
     const esp_partition_t *part =
-        esp_partition_find_first(ESP_PARTITION_TYPE_APP, ESP_PARTITION_SUBTYPE_ANY, kApps[i].partition_label);
+        esp_partition_find_first(ESP_PARTITION_TYPE_APP, ESP_PARTITION_SUBTYPE_ANY, s_partition_labels[i]);
     esp_app_desc_t desc;
     if (part == NULL || esp_ota_get_partition_description(part, &desc) != ESP_OK) {
         return false;

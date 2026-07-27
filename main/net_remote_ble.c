@@ -64,8 +64,8 @@ static void handle_select_write(const char *value) {
     }
 
     bool known_slot = false;
-    for (size_t i = 0; i < kAppsCount; i++) {
-        if (strcmp(kApps[i].partition_label, label) == 0) {
+    for (size_t i = 0; i < app_registry_count(); i++) {
+        if (strcmp(app_registry_partition_label(i), label) == 0) {
             known_slot = true;
             break;
         }
@@ -146,8 +146,9 @@ static const struct ble_gatt_svc_def s_gatt_svcs[] = {
 
 static void build_slots_text(void) {
     int len = 0;
-    for (size_t i = 0; i < kAppsCount && len < (int)sizeof(s_slots_text) - 32; i++) {
-        len += snprintf(s_slots_text + len, sizeof(s_slots_text) - len, "%s%s", i == 0 ? "" : ",", kApps[i].partition_label);
+    for (size_t i = 0; i < app_registry_count() && len < (int)sizeof(s_slots_text) - 32; i++) {
+        len += snprintf(s_slots_text + len, sizeof(s_slots_text) - len, "%s%s", i == 0 ? "" : ",",
+                         app_registry_partition_label(i));
     }
 }
 

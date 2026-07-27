@@ -157,16 +157,18 @@ push. What does vary per board/chip:
 ## Reusing this launcher in a new project
 
 1. Copy/reference this repo (submodule or vendor the `main/` + Kconfig).
-2. Adjust `partitions.csv` (or `_4mb`) to your slot count/sizes.
-3. `idf.py menuconfig`: set `LAUNCHER_APP_SLOT_COUNT` /
-   `LAUNCHER_APP_SLOT_SIZE` to match, set display/EC11 GPIO pins.
-4. Edit `main/app_registry.c` (`kApps[]`) with your own slot names —
-   `boot_check_slot_count_consistency()` logs a warning at boot (not a
-   crash) if this drifts from `partitions.csv`/Kconfig.
-5. Pick a nav driver in menuconfig (EC11 or the console-based mock).
+2. Adjust `partitions.csv` (or `_4mb`) to your slot count/sizes — this is
+   now the *only* place slot count/identity is declared (see issue #24);
+   the launcher reads it straight from the partition table at boot.
+3. `idf.py menuconfig`: set `LAUNCHER_APP_SLOT_SIZE` to match, set
+   display/EC11 GPIO pins.
+4. Pick a nav driver in menuconfig (EC11 or the console-based mock).
 
-`main/boot_logic.c`, `main/nvs_state.c`, `main/ui_menu.c` shouldn't need to
-change.
+No source edit needed for slot identity — `main/app_registry.c` builds the
+registry from `partitions.csv` itself at boot
+(`app_registry_init()`/`esp_partition_find()`), not from a hand-typed
+array. `main/boot_logic.c`, `main/nvs_state.c`, `main/ui_menu.c` shouldn't
+need to change either.
 
 ## Design decisions that deviate from the original spec
 
@@ -284,9 +286,10 @@ reusing/extending this repo:
   framework's own internal build project name (e.g.
   `"arduino-lib-builder"`), never the guest sketch's actual name, since
   that field is populated by whatever build system produced the image, not
-  something the launcher controls. Final approach: `app_registry.c`'s
-  static `kApps[i].display_name` is always the label text; a slot's *empty
-  vs. flashed* state is a separate boolean check
+  something the launcher controls. Final approach: a static, hand-typed
+  label (`kApps[i].display_name` at the time; superseded by the raw
+  partition label under issue #24 below) is always the fallback label text;
+  a slot's *empty vs. flashed* state is a separate boolean check
   (`app_registry_slot_is_flashed()`, still via
   `esp_ota_get_partition_description()`, just ignoring its `project_name`
   field), and for OTA-downloaded slots specifically, the real name comes
@@ -310,6 +313,33 @@ reusing/extending this repo:
   identically because both call the same
   `app_registry_format_version_suffix()` rather than each formatting their
   own copy.
+- **App slots are derived from `partitions.csv` at boot, not hand-typed
+  (`app_registry.c`, issue #24).** Previously `kApps[]` was a static,
+  compile-time array that had to be hand-kept in sync with both
+  `partitions.csv` and `CONFIG_LAUNCHER_APP_SLOT_COUNT` — nothing enforced
+  agreement between the three, and reusing this launcher in a new project
+  required a source edit just to rename slots. `app_registry_init()` now
+  enumerates `ESP_PARTITION_TYPE_APP` partitions with an OTA subtype
+  straight from the partition table ESP-IDF already loaded, the same way
+  the old `boot_check_slot_count_consistency()` did — just uses the result
+  instead of only counting it. `CONFIG_LAUNCHER_APP_SLOT_COUNT` and that
+  consistency check are both gone: there's nothing left for a slot count to
+  drift *against*, since it's read from the same table it used to be
+  checked against.
+  `esp_partition_find()`'s own iteration order is **not** partition-table
+  declaration order — verified against the actual ESP-IDF v5.5
+  `esp_partition.c` source, not assumed: its internal list is built via
+  `SLIST_INSERT_HEAD`, so iterating it comes back reversed. `app_registry_init()`
+  collects matches first and sorts by subtype before assigning slot indices,
+  for deterministic `ota_0, ota_1, ...` ordering.
+  Display name fallback changed to match: `app_registry_resolve_label()`
+  now falls back to the raw partition label (e.g. `"app_slot2"`) instead of
+  a hand-typed placeholder, for the same reason there's no more hand-typed
+  array to hold one. Tradeoff: a factory-flashed slot shows an unstyled
+  label until its first OTA download gives it a real name via
+  `nvs_state_set_slot_name()`. A friendlier fallback would need a "rename
+  slot" menu action writing into that same NVS key — worth its own
+  follow-up if wanted, not needed for this change.
 
 ## Network features (optional, off by default)
 

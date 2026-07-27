@@ -1,6 +1,7 @@
 #include "net_remote_http.h"
 #include "app_registry.h"
 #include "boot_into.h"
+#include "nvs_state.h"
 
 #include <string.h>
 #include <stdio.h>
@@ -31,13 +32,15 @@ static esp_err_t index_handler(httpd_req_t *req) {
     static char body[2048];
     int len = 0;
     len += snprintf(body + len, sizeof(body) - len, "<html><body><h1>launcher</h1><ul>");
-    for (size_t i = 0; i < kAppsCount && len < (int)sizeof(body) - 300; i++) {
+    for (size_t i = 0; i < app_registry_count() && len < (int)sizeof(body) - 300; i++) {
+        char name_buf[NVS_STATE_SLOT_NAME_LEN];
+        const char *display_name = app_registry_resolve_label(i, name_buf, sizeof(name_buf));
         len += snprintf(
             body + len, sizeof(body) - len,
             "<li><form action=\"/boot\" method=\"get\">"
             "<input type=\"hidden\" name=\"slot\" value=\"%s\">%s "
-            "%s<button type=\"submit\">Booter</button></form></li>",
-            kApps[i].partition_label, kApps[i].display_name,
+            "%s<button type=\"submit\">Boot</button></form></li>",
+            app_registry_partition_label(i), display_name,
             CONFIG_LAUNCHER_NET_REMOTE_PIN[0] != '\0'
                 ? "<input type=\"password\" name=\"pin\" placeholder=\"PIN\">"
                 : "");
@@ -64,8 +67,8 @@ static esp_err_t boot_handler(httpd_req_t *req) {
     }
 
     bool known_slot = false;
-    for (size_t i = 0; i < kAppsCount; i++) {
-        if (strcmp(kApps[i].partition_label, slot) == 0) {
+    for (size_t i = 0; i < app_registry_count(); i++) {
+        if (strcmp(app_registry_partition_label(i), slot) == 0) {
             known_slot = true;
             break;
         }

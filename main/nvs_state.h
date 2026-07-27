@@ -37,9 +37,10 @@ esp_err_t nvs_state_get_protocol_version(uint32_t *out_version);
  * compiles in when OTA/version-check networking is enabled. Keep >= that
  * value if it ever changes. */
 #define NVS_STATE_SLOT_NAME_LEN 64
-/* Matches CONFIG_LAUNCHER_APP_SLOT_COUNT's Kconfig range (1-8, see
- * Kconfig.projbuild) -- slot_index beyond this is rejected rather than
- * silently truncated/aliased. */
+/* Upper bound on how many app slots app_registry.c will register from the
+ * partition table at boot (see app_registry_init(), issue #24) --
+ * slot_index beyond this is rejected rather than silently
+ * truncated/aliased. */
 #define NVS_STATE_MAX_APP_SLOTS 8
 
 /* Per-slot app name, keyed by slot index (not partition label -- keeps NVS

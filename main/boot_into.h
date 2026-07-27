@@ -16,11 +16,6 @@ extern "C" {
  */
 esp_err_t boot_into(const char *partition_label);
 
-/* Logs a warning (does not block boot) if the number of ota_* app
- * partitions actually present on flash doesn't match
- * CONFIG_LAUNCHER_APP_SLOT_COUNT -- see boot_logic_slot_count_matches. */
-void boot_check_slot_count_consistency(void);
-
 #ifdef __cplusplus
 }
 #endif

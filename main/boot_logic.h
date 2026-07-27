@@ -45,11 +45,6 @@ typedef enum {
  * README.md "Design decisions". This module has no role in that anymore. */
 boot_action_t boot_logic_decide(const boot_decision_input_t *input);
 
-/* True if the number of ota_* partitions actually found on flash matches
- * CONFIG_LAUNCHER_APP_SLOT_COUNT (caller logs a warning on mismatch, does
- * not block boot -- see README). */
-bool boot_logic_slot_count_matches(int found_ota_partitions, int configured_slot_count);
-
 /* True if the first byte of a partition looks like a valid ESP-IDF app
  * image header (magic byte 0xE9), used to avoid booting into a slot that
  * was never flashed. */

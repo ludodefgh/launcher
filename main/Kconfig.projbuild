@@ -2,16 +2,6 @@ menu "Bootloader Launcher Configuration"
 
     menu "Slots / partitions"
 
-        config LAUNCHER_APP_SLOT_COUNT
-            int "Number of application slots"
-            range 1 8
-            default 3
-            help
-                Number of "app" partitions managed by the launcher (excluding the
-                launcher's own factory partition). Must stay consistent with the
-                number of ota_* entries declared in partitions.csv and with
-                app_registry.c -- a mismatch is logged as a warning at boot.
-
         config LAUNCHER_APP_SLOT_SIZE
             hex "Size of each slot (bytes)"
             default 0x180000

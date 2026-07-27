@@ -75,24 +75,3 @@ esp_err_t boot_into(const char *partition_label) {
     esp_restart();
     return ESP_OK; /* unreachable */
 }
-
-void boot_check_slot_count_consistency(void) {
-    int found = 0;
-    esp_partition_iterator_t it = esp_partition_find(ESP_PARTITION_TYPE_APP, ESP_PARTITION_SUBTYPE_ANY, NULL);
-    while (it != NULL) {
-        const esp_partition_t *part = esp_partition_get(it);
-        if (part->subtype >= ESP_PARTITION_SUBTYPE_APP_OTA_MIN &&
-            part->subtype < ESP_PARTITION_SUBTYPE_APP_OTA_MAX) {
-            found++;
-        }
-        it = esp_partition_next(it);
-    }
-    esp_partition_iterator_release(it);
-
-    if (!boot_logic_slot_count_matches(found, CONFIG_LAUNCHER_APP_SLOT_COUNT)) {
-        ESP_LOGW(TAG,
-                 "partition table has %d ota_* slot(s) but CONFIG_LAUNCHER_APP_SLOT_COUNT=%d -- "
-                 "check partitions.csv / app_registry.c / menuconfig are in sync",
-                 found, CONFIG_LAUNCHER_APP_SLOT_COUNT);
-    }
-}

@@ -67,13 +67,6 @@ static void test_decide_shows_menu_when_all_conditions_true(void) {
     CHECK(boot_logic_decide(&in) == BOOT_ACTION_SHOW_MENU, "should show menu: all conditions true at once");
 }
 
-static void test_slot_count_matches(void) {
-    CHECK(boot_logic_slot_count_matches(3, 3) == true, "3 found / 3 configured should match");
-    CHECK(boot_logic_slot_count_matches(0, 3) == false, "0 found / 3 configured should not match");
-    CHECK(boot_logic_slot_count_matches(4, 3) == false, "4 found / 3 configured should not match");
-    CHECK(boot_logic_slot_count_matches(0, 0) == true, "0 found / 0 configured should match");
-}
-
 static void test_valid_app_magic(void) {
     CHECK(boot_logic_is_valid_app_magic(0xE9) == true, "0xE9 is the ESP-IDF app image magic byte");
     CHECK(boot_logic_is_valid_app_magic(0x00) == false, "0x00 (erased/never-flashed flash) is not valid");
@@ -86,7 +79,6 @@ int main(void) {
     test_decide_shows_menu_when_force_menu_set();
     test_decide_shows_menu_when_button_held();
     test_decide_shows_menu_when_all_conditions_true();
-    test_slot_count_matches();
     test_valid_app_magic();
 
     printf("%d/%d checks passed\n", g_checks - g_failures, g_checks);
