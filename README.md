@@ -284,6 +284,10 @@ Either transport calls the exact same `boot_into()` used by the local menu
 - **HTTP** (`main/net_remote_http.c`): `esp_http_server` on port 80. `GET /`
   lists slots with a boot button (and a PIN field if configured); `GET
   /boot?slot=<label>&pin=<pin>` triggers the boot. Requires WiFi.
+  **Deliberately boot-only, no remote-triggered OTA download** — matches
+  the original spec's scope for this feature ("list slots and trigger
+  boot"), and the on-device "Telecharger un programme" menu entry already
+  covers that case (see issue #18). Revisit if a concrete need comes up.
 - **BLE** (`main/net_remote_ble.c`): a minimal NimBLE GATT peripheral, no
   pairing/bonding (PIN is checked at the application layer instead, same as
   HTTP, to keep both transports symmetric and avoid NimBLE's much larger

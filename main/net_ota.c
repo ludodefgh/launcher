@@ -150,6 +150,10 @@ static esp_err_t download_to_partition(const net_manifest_entry_t *entry, const 
         .url = entry->url,
         .timeout_ms = 15000,
         .crt_bundle_attach = is_https ? esp_crt_bundle_attach : NULL,
+        /* See the matching comment in net_manifest.c -- GitHub Releases
+         * redirect targets need more than the default 512-byte buffer. */
+        .buffer_size = 2048,
+        .buffer_size_tx = 2048,
     };
     esp_http_client_handle_t client = esp_http_client_init(&config);
     if (client == NULL) {

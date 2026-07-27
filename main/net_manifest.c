@@ -20,6 +20,13 @@ static esp_err_t fetch_to_buffer(const char *url, char **out_buf, int *out_len) 
         .url = url,
         .timeout_ms = 10000,
         .crt_bundle_attach = is_https ? esp_crt_bundle_attach : NULL,
+        /* GitHub Releases redirects (see net_http_util.c) land on a
+         * presigned URL with a long query string (signature, expiry, ...),
+         * easily 400-800+ chars -- the default 512-byte buffer isn't
+         * enough to build the follow-up request and esp_http_client_open()
+         * fails with "Out of buffer" before ever reaching the server. */
+        .buffer_size = 2048,
+        .buffer_size_tx = 2048,
     };
     esp_http_client_handle_t client = esp_http_client_init(&config);
     if (client == NULL) {

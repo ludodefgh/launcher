@@ -1,8 +1,12 @@
 /*
  * Minimal ST7789 SPI display driver: no full framebuffer (would cost
  * ~150KB for a 320x240 RGB565 panel, too much for RAM-constrained chips
- * like the C3) -- fill/text primitives stream row-by-row directly to the
- * panel via esp_lcd_panel_draw_bitmap() instead.
+ * like the C3) -- fill/text primitives stream directly to the panel via
+ * esp_lcd_panel_draw_bitmap() instead, batched in chunks of FILL_CHUNK_ROWS
+ * rows (fill_area) or a whole glyph cell at a time (draw_glyph) rather than
+ * one SPI transaction per pixel row -- a naive one-row-at-a-time version of
+ * this file made every menu redraw visibly crawl (~3s, hundreds of tiny
+ * transactions per row of text), see issue #19.
  */
 
 #include "display.h"
@@ -11,6 +15,7 @@
 
 #include <string.h>
 #include <ctype.h>
+#include <stdbool.h>
 
 #include "driver/gpio.h"
 #include "driver/spi_master.h"
@@ -43,7 +48,14 @@ static const char *TAG = "display";
 #endif
 
 static esp_lcd_panel_handle_t s_panel;
-static uint16_t s_line_buf[DISPLAY_WIDTH];
+
+/* Matches spi_bus_config_t.max_transfer_sz below (DISPLAY_WIDTH * 32 *
+ * sizeof(uint16_t)) -- batching fill_area() into chunks of this many rows
+ * per esp_lcd_panel_draw_bitmap() call, instead of one call per row, is
+ * most of the fix for issue #19 (240 transactions for a full-screen clear
+ * down to ~8). */
+#define FILL_CHUNK_ROWS 32
+static uint16_t s_line_buf[DISPLAY_WIDTH * FILL_CHUNK_ROWS];
 
 static void fill_area(int x, int y, int w, int h, display_color_t color) {
     if (w <= 0 || h <= 0 || s_panel == NULL) {
@@ -56,11 +68,17 @@ static void fill_area(int x, int y, int w, int h, display_color_t color) {
     if (w <= 0 || h <= 0) {
         return;
     }
-    for (int i = 0; i < w; i++) {
+
+    int first_chunk_rows = h < FILL_CHUNK_ROWS ? h : FILL_CHUNK_ROWS;
+    for (int i = 0; i < w * first_chunk_rows; i++) {
         s_line_buf[i] = color;
     }
-    for (int row = 0; row < h; row++) {
-        esp_lcd_panel_draw_bitmap(s_panel, x, y + row, x + w, y + row + 1, s_line_buf);
+
+    int row = 0;
+    while (row < h) {
+        int chunk_rows = (h - row) < FILL_CHUNK_ROWS ? (h - row) : FILL_CHUNK_ROWS;
+        esp_lcd_panel_draw_bitmap(s_panel, x, y + row, x + w, y + row + chunk_rows, s_line_buf);
+        row += chunk_rows;
     }
 }
 
@@ -147,6 +165,10 @@ void display_fill_rect(int x, int y, int w, int h, display_color_t color) {
     fill_area(x, y, w, h, color);
 }
 
+/* 6*MAX_GLYPH_SCALE wide (5 font columns + 1 spacer) x 7*MAX_GLYPH_SCALE tall. */
+#define MAX_GLYPH_SCALE 6
+static uint16_t s_glyph_buf[6 * MAX_GLYPH_SCALE * 7 * MAX_GLYPH_SCALE];
+
 static void draw_glyph(int x, int y, char ch, display_color_t fg, display_color_t bg, int scale) {
     ch = (char)toupper((unsigned char)ch);
     const uint8_t *cols;
@@ -156,15 +178,31 @@ static void draw_glyph(int x, int y, char ch, display_color_t fg, display_color_
         cols = font5x7_dense[ch - FONT5X7_FIRST_CHAR];
     }
 
-    for (int col = 0; col < 5; col++) {
-        uint8_t bits = cols[col];
-        for (int row = 0; row < 7; row++) {
-            display_color_t px = (bits & (1 << row)) ? fg : bg;
-            fill_area(x + col * scale, y + row * scale, scale, scale, px);
+    if (scale > MAX_GLYPH_SCALE) {
+        scale = MAX_GLYPH_SCALE; /* clamp rather than overrun s_glyph_buf */
+    }
+    int glyph_w = 6 * scale; /* 5 font columns + 1 blank spacer column */
+    int glyph_h = 7 * scale;
+    if (x < 0 || y < 0 || x + glyph_w > DISPLAY_WIDTH || y + glyph_h > DISPLAY_HEIGHT) {
+        return; /* off-screen: skip rather than deal with partial-buffer clipping */
+    }
+
+    /* Build the whole glyph cell in RAM and issue a single draw_bitmap call,
+     * instead of up to 35 tiny per-pixel-block transactions -- this is what
+     * actually made text-heavy screens slow (see issue #19), fill_area()'s
+     * own chunking helps but text was the dominant cost. */
+    for (int gy = 0; gy < glyph_h; gy++) {
+        int font_row = gy / scale;
+        for (int gx = 0; gx < glyph_w; gx++) {
+            bool on = false;
+            if (gx < 5 * scale) {
+                int font_col = gx / scale;
+                on = (cols[font_col] & (1 << font_row)) != 0;
+            }
+            s_glyph_buf[gy * glyph_w + gx] = on ? fg : bg;
         }
     }
-    /* 1-column blank spacer between glyphs, at native scale. */
-    fill_area(x + 5 * scale, y, scale, 7 * scale, bg);
+    esp_lcd_panel_draw_bitmap(s_panel, x, y, x + glyph_w, y + glyph_h, s_glyph_buf);
 }
 
 void display_draw_text(int x, int y, const char *text, display_color_t fg, display_color_t bg, int scale) {
