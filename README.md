@@ -268,10 +268,13 @@ Both features above fetch `<CONFIG_LAUNCHER_NET_OTA_URL_BASE>/manifest.json`:
 
 `slot` is used by version-check to match a manifest entry to a local
 partition; `url` can point anywhere (doesn't have to be under
-`URL_BASE`, e.g. a GitHub Releases asset). `size` is informational only
-(logged as a mismatch warning if it disagrees with what was actually
-downloaded, never trusted for erase sizing — `OTA_SIZE_UNKNOWN` is used
-instead, which erases the whole target partition regardless).
+`URL_BASE`, e.g. a GitHub Releases asset — both the manifest fetch and the
+`.bin` download follow up to 5 redirects via `net_http_util.c`, needed
+since GitHub Releases download URLs always respond with a 302). `size` is
+informational only (logged as a mismatch warning if it disagrees with what
+was actually downloaded, never trusted for erase sizing —
+`OTA_SIZE_UNKNOWN` is used instead, which erases the whole target
+partition regardless).
 
 ### Remote control (`CONFIG_LAUNCHER_NET_REMOTE_CONTROL_ENABLE`)
 

@@ -130,15 +130,12 @@ static void run_wifi_and_http_remote(void *arg) {
     }
     net_remote_http_start();
 
+    /* IP is logged by net_wifi.c's event handler (issue #15) and shown
+     * persistently in the menu footer (ui_menu.c, issue #17) -- no need
+     * for a transient splash here that would just delay the menu. */
     char ip[16];
     if (net_wifi_get_ip_string(ip, sizeof(ip))) {
-        char line[32];
-        snprintf(line, sizeof(line), "IP: %s", ip);
-        display_fill_screen(DISPLAY_COLOR_BLACK);
-        display_draw_text(8, 100, "CONTROLE A DISTANCE ACTIF", DISPLAY_COLOR_WHITE, DISPLAY_COLOR_BLACK, 1);
-        display_draw_text(8, 116, line, DISPLAY_COLOR_WHITE, DISPLAY_COLOR_BLACK, 1);
         ESP_LOGI(TAG, "remote control HTTP server reachable at http://%s/", ip);
-        vTaskDelay(pdMS_TO_TICKS(2000));
     }
 }
 #elif CONFIG_LAUNCHER_NET_REMOTE_TRANSPORT_BLE

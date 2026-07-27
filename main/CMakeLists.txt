@@ -47,7 +47,7 @@ if(CONFIG_LAUNCHER_NET_WIFI_ENABLE)
 endif()
 
 if(CONFIG_LAUNCHER_NET_OTA_ENABLE OR CONFIG_LAUNCHER_NET_VERSION_CHECK_ENABLE)
-    list(APPEND launcher_srcs "net_manifest.c")
+    list(APPEND launcher_srcs "net_manifest.c" "net_http_util.c")
 endif()
 
 if(CONFIG_LAUNCHER_NET_OTA_ENABLE)

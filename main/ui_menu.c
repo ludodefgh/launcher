@@ -6,6 +6,9 @@
 #if CONFIG_LAUNCHER_NET_VERSION_CHECK_ENABLE
 #include "net_version_check.h"
 #endif
+#if CONFIG_LAUNCHER_NET_REMOTE_CONTROL_ENABLE && CONFIG_LAUNCHER_NET_REMOTE_TRANSPORT_HTTP
+#include "net_wifi.h"
+#endif
 
 #include <stdio.h>
 #include "freertos/FreeRTOS.h"
@@ -63,6 +66,15 @@ static void draw_menu(int selected) {
         }
         display_draw_text(MARGIN_X, y, line, fg, bg, ENTRY_SCALE);
     }
+
+#if CONFIG_LAUNCHER_NET_REMOTE_CONTROL_ENABLE && CONFIG_LAUNCHER_NET_REMOTE_TRANSPORT_HTTP
+    char ip[16];
+    if (net_wifi_get_ip_string(ip, sizeof(ip))) {
+        char footer[24];
+        snprintf(footer, sizeof(footer), "IP: %s", ip);
+        display_draw_text(MARGIN_X, display_height() - 16, footer, DISPLAY_COLOR_WHITE, DISPLAY_COLOR_BLACK, 1);
+    }
+#endif
 }
 
 int ui_menu_run(const nav_input_driver_t *drv) {

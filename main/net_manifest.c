@@ -8,6 +8,7 @@
 #include "esp_log.h"
 #include "sdkconfig.h"
 #include "cJSON.h"
+#include "net_http_util.h"
 
 static const char *TAG = "net_manifest";
 
@@ -25,15 +26,13 @@ static esp_err_t fetch_to_buffer(const char *url, char **out_buf, int *out_len) 
         return ESP_ERR_NO_MEM;
     }
 
-    esp_err_t err = esp_http_client_open(client, 0);
+    int status = 0;
+    esp_err_t err = net_http_open_and_follow_redirects(client, &status);
     if (err != ESP_OK) {
         ESP_LOGE(TAG, "open failed: %s", esp_err_to_name(err));
         esp_http_client_cleanup(client);
         return err;
     }
-
-    esp_http_client_fetch_headers(client);
-    int status = esp_http_client_get_status_code(client);
     if (status != 200) {
         ESP_LOGE(TAG, "manifest GET '%s' returned HTTP %d", url, status);
         esp_http_client_close(client);
