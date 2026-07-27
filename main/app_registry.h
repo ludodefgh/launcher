@@ -92,6 +92,15 @@ bool app_registry_get_version(size_t i, char *out_version, size_t out_version_le
  * coherent"). out_suffix_len should be >= APP_REGISTRY_VERSION_SUFFIX_LEN. */
 void app_registry_format_version_suffix(size_t i, char *out_suffix, size_t out_suffix_len);
 
+/* Erases slot i's partition contents entirely (esp_partition_erase_range()
+ * over the whole partition) and clears any OTA-recorded name/version for
+ * it, so the slot correctly shows as empty again afterward rather than
+ * keeping a stale label. Blocking -- erasing a full app partition can take
+ * a few seconds; callers should show a wait message first (see
+ * ui_menu.c's slot action menu). Returns false if the slot index is out of
+ * range or the erase itself fails (logged either way). */
+bool app_registry_erase_slot(size_t i);
+
 #ifdef __cplusplus
 }
 #endif

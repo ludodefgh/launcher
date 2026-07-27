@@ -16,6 +16,11 @@ rotary encoder, but the core (boot logic, HAL, Kconfig) is chip-agnostic.
   exists and the encoder button isn't held, it boots straight into it
   (`esp_ota_set_boot_partition` + `esp_restart`). Otherwise (first boot,
   forced menu, or button held) it shows a selection menu on the TFT.
+- Selecting a slot from the menu opens a small "Launch" (default) /
+  "Delete" action menu rather than booting immediately. "Delete" asks for
+  confirmation, then erases that slot's partition entirely
+  (`app_registry_erase_slot()`) and clears any OTA-recorded name/version
+  for it, so the slot correctly shows as empty again.
 - Crash-loop recovery: if the remembered app never confirms itself healthy
   (`esp_ota_mark_app_valid_cancel_rollback()`) before crashing, ESP-IDF's
   bootloader-level app rollback (`CONFIG_LAUNCHER_CRASH_LOOP_RECOVERY_ENABLE`,

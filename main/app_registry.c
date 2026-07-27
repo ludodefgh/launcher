@@ -140,3 +140,29 @@ void app_registry_format_version_suffix(size_t i, char *out_suffix, size_t out_s
         out_suffix[0] = '\0';
     }
 }
+
+bool app_registry_erase_slot(size_t i) {
+    if (i >= s_count) {
+        return false;
+    }
+    const esp_partition_t *part =
+        esp_partition_find_first(ESP_PARTITION_TYPE_APP, ESP_PARTITION_SUBTYPE_ANY, s_partition_labels[i]);
+    if (part == NULL) {
+        ESP_LOGE(TAG, "erase: partition '%s' not found", s_partition_labels[i]);
+        return false;
+    }
+    esp_err_t err = esp_partition_erase_range(part, 0, part->size);
+    if (err != ESP_OK) {
+        ESP_LOGE(TAG, "esp_partition_erase_range('%s') failed: %s", s_partition_labels[i], esp_err_to_name(err));
+        return false;
+    }
+
+    /* Best-effort: the erase itself already succeeded regardless of
+     * whether these clear cleanly, and a stale name/version is a cosmetic
+     * problem, not worth reporting failure over. */
+    nvs_state_set_slot_name(i, "");
+    nvs_state_set_slot_version(i, "");
+
+    ESP_LOGI(TAG, "erased slot '%s'", s_partition_labels[i]);
+    return true;
+}

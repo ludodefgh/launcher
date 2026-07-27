@@ -79,6 +79,102 @@ static void draw_row(int i, bool is_selected) {
     display_draw_text(MARGIN_X, y, line, fg, bg, ENTRY_SCALE);
 }
 
+#define ACTION_LAUNCH 0
+#define ACTION_DELETE 1
+
+/* Small fixed 2-option action menu shown when a real app slot (not the
+ * "Download a program" row) is selected -- see issue "click a slot ->
+ * launch/delete popup instead of launching directly". Deliberately not
+ * sharing net_ota.c's run_picker()/run_confirm() (a generic label-list
+ * picker over its own private queue, used from a different call path) --
+ * this reuses ui_menu_run()'s already-active s_evt_queue/callback directly
+ * instead of tearing them down and recreating them for a fixed 2-item
+ * menu. */
+static void draw_action_menu(int slot_i, int action) {
+    display_fill_screen(DISPLAY_COLOR_BLACK);
+    char name_buf[NVS_STATE_SLOT_NAME_LEN];
+    const char *display_name = app_registry_resolve_label((size_t)slot_i, name_buf, sizeof(name_buf));
+    char title[32];
+    snprintf(title, sizeof(title), "%.20s", display_name);
+    display_draw_text(MARGIN_X, TITLE_Y, title, DISPLAY_COLOR_WHITE, DISPLAY_COLOR_BLACK, TITLE_SCALE);
+
+    static const char *const labels[2] = {"Launch", "Delete"};
+    for (int i = 0; i < 2; i++) {
+        int y = LIST_START_Y + i * ROW_HEIGHT;
+        bool is_selected = (i == action);
+        display_color_t bg = is_selected ? DISPLAY_COLOR_WHITE : DISPLAY_COLOR_BLACK;
+        display_color_t fg = is_selected ? DISPLAY_COLOR_BLACK : DISPLAY_COLOR_WHITE;
+        display_fill_rect(0, y - 2, display_width(), ROW_HEIGHT, bg);
+        char line[16];
+        snprintf(line, sizeof(line), "%c %s", is_selected ? '>' : ' ', labels[i]);
+        display_draw_text(MARGIN_X, y, line, fg, bg, ENTRY_SCALE);
+    }
+}
+
+/* Blocking yes/no confirm before an actually-destructive erase -- same
+ * SELECT=yes/LONG_PRESS=no convention as net_ota.c's run_confirm(). */
+static bool confirm_delete(int slot_i) {
+    display_fill_screen(DISPLAY_COLOR_BLACK);
+    display_draw_text(MARGIN_X, 90, "DELETE THIS SLOT?", DISPLAY_COLOR_WHITE, DISPLAY_COLOR_BLACK, 2);
+    char name_buf[NVS_STATE_SLOT_NAME_LEN];
+    const char *display_name = app_registry_resolve_label((size_t)slot_i, name_buf, sizeof(name_buf));
+    char line[40];
+    snprintf(line, sizeof(line), "%.20s", display_name);
+    display_draw_text(MARGIN_X, 120, line, DISPLAY_COLOR_WHITE, DISPLAY_COLOR_BLACK, 1);
+    display_draw_text(MARGIN_X, 150, "SELECT=YES  LONG PRESS=CANCEL", DISPLAY_COLOR_WHITE, DISPLAY_COLOR_BLACK, 1);
+
+    while (1) {
+        nav_event_t evt;
+        if (xQueueReceive(s_evt_queue, &evt, portMAX_DELAY) != pdTRUE) {
+            continue;
+        }
+        if (evt == NAV_EVENT_SELECT) {
+            return true;
+        }
+        if (evt == NAV_EVENT_LONG_PRESS) {
+            return false;
+        }
+    }
+}
+
+/* Returns true if the user chose to launch slot_i (caller proceeds to boot
+ * it as before); false if the user deleted it or cancelled -- either way,
+ * nothing should be booted, caller just redraws the main menu and keeps
+ * going. */
+static bool run_slot_action_menu(int slot_i) {
+    int action = ACTION_LAUNCH;
+    draw_action_menu(slot_i, action);
+
+    while (1) {
+        nav_event_t evt;
+        if (xQueueReceive(s_evt_queue, &evt, portMAX_DELAY) != pdTRUE) {
+            continue;
+        }
+        switch (evt) {
+            case NAV_EVENT_UP:
+            case NAV_EVENT_DOWN:
+                action = (action == ACTION_LAUNCH) ? ACTION_DELETE : ACTION_LAUNCH;
+                draw_action_menu(slot_i, action);
+                break;
+            case NAV_EVENT_SELECT:
+                if (action == ACTION_LAUNCH) {
+                    return true;
+                }
+                if (confirm_delete(slot_i)) {
+                    display_fill_screen(DISPLAY_COLOR_BLACK);
+                    display_draw_text(MARGIN_X, 100, "ERASING...", DISPLAY_COLOR_WHITE, DISPLAY_COLOR_BLACK, 2);
+                    app_registry_erase_slot((size_t)slot_i);
+                }
+                return false;
+            case NAV_EVENT_BACK:
+            case NAV_EVENT_LONG_PRESS:
+                return false; /* cancelled -- back to the main menu */
+            default:
+                break;
+        }
+    }
+}
+
 static void draw_footer(void) {
 #if CONFIG_LAUNCHER_NET_REMOTE_CONTROL_ENABLE && CONFIG_LAUNCHER_NET_REMOTE_TRANSPORT_HTTP
     char ip[16];
@@ -130,6 +226,13 @@ int ui_menu_run(const nav_input_driver_t *drv) {
                 draw_row(selected, true);
                 break;
             case NAV_EVENT_SELECT:
+                if (selected < (int)app_registry_count() && !run_slot_action_menu(selected)) {
+                    /* Deleted or cancelled -- nothing to boot, redraw the
+                     * main menu (slot state may have changed) and keep
+                     * going instead of returning. */
+                    draw_menu_full(selected);
+                    break;
+                }
                 drv->set_callback(NULL);
                 vQueueDelete(s_evt_queue);
                 s_evt_queue = NULL;
@@ -137,7 +240,7 @@ int ui_menu_run(const nav_input_driver_t *drv) {
             case NAV_EVENT_BACK:
             case NAV_EVENT_LONG_PRESS:
             default:
-                break; /* unused in v1, no sub-menus */
+                break;
         }
     }
 }
