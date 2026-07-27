@@ -1,6 +1,7 @@
 #pragma once
 
 #include <stdbool.h>
+#include <stddef.h>
 
 #ifdef __cplusplus
 extern "C" {
@@ -20,6 +21,13 @@ extern "C" {
 bool net_wifi_connect(void);
 
 bool net_wifi_is_connected(void);
+
+/* Fills buf with the last assigned IPv4 address as a string (e.g.
+ * "192.168.1.42") and returns true, or returns false without touching buf
+ * if not currently connected. Useful for surfacing the address a remote
+ * control feature needs to be reached at without a serial cable attached
+ * -- see main.c. */
+bool net_wifi_get_ip_string(char *buf, size_t buf_len);
 
 /* Persists SSID/password to NVS for future boots (e.g. after a successful
  * connect using the Kconfig dev fallback, or from a future provisioning UI). */

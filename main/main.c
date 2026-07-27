@@ -1,5 +1,6 @@
 #include <stdbool.h>
 #include <string.h>
+#include <stdio.h>
 #include <inttypes.h>
 
 #include "freertos/FreeRTOS.h"
@@ -80,6 +81,80 @@ static void show_error_and_wait(const char *line1, const char *line2) {
     vTaskDelay(pdMS_TO_TICKS(1500));
 }
 
+#if CONFIG_LAUNCHER_NET_WIFI_ENABLE || CONFIG_LAUNCHER_NET_REMOTE_TRANSPORT_BLE
+#include "freertos/semphr.h"
+
+/*
+ * WiFi/BLE init plus whatever TLS/HTTP/cJSON call frames stack on top of it
+ * outgrow the default "main" task stack (3584 bytes) -- a real stack
+ * overflow was observed running these inline on app_main()'s own stack,
+ * see issue #14. Run them on a dedicated, generously-sized worker task
+ * instead and just block app_main() until done, so the call sites below
+ * don't need to change their synchronous, blocking calling convention.
+ */
+typedef struct {
+    void (*fn)(void *arg);
+    void *arg;
+    SemaphoreHandle_t done;
+} network_task_ctx_t;
+
+static void network_task_trampoline(void *param) {
+    network_task_ctx_t *ctx = (network_task_ctx_t *)param;
+    ctx->fn(ctx->arg);
+    xSemaphoreGive(ctx->done);
+    vTaskDelete(NULL);
+}
+
+static void run_on_network_task(void (*fn)(void *arg), void *arg) {
+    network_task_ctx_t ctx = {.fn = fn, .arg = arg, .done = xSemaphoreCreateBinary()};
+    xTaskCreate(network_task_trampoline, "launcher_net", CONFIG_LAUNCHER_NET_TASK_STACK_SIZE, &ctx,
+                tskIDLE_PRIORITY + 5, NULL);
+    xSemaphoreTake(ctx.done, portMAX_DELAY);
+    vSemaphoreDelete(ctx.done);
+}
+#endif
+
+#if CONFIG_LAUNCHER_NET_VERSION_CHECK_ENABLE
+static void run_version_check(void *arg) {
+    (void)arg;
+    net_version_check_run();
+}
+#endif
+
+#if CONFIG_LAUNCHER_NET_REMOTE_CONTROL_ENABLE
+#if CONFIG_LAUNCHER_NET_REMOTE_TRANSPORT_HTTP
+static void run_wifi_and_http_remote(void *arg) {
+    (void)arg;
+    if (!net_wifi_connect()) {
+        return;
+    }
+    net_remote_http_start();
+
+    char ip[16];
+    if (net_wifi_get_ip_string(ip, sizeof(ip))) {
+        char line[32];
+        snprintf(line, sizeof(line), "IP: %s", ip);
+        display_fill_screen(DISPLAY_COLOR_BLACK);
+        display_draw_text(8, 100, "CONTROLE A DISTANCE ACTIF", DISPLAY_COLOR_WHITE, DISPLAY_COLOR_BLACK, 1);
+        display_draw_text(8, 116, line, DISPLAY_COLOR_WHITE, DISPLAY_COLOR_BLACK, 1);
+        ESP_LOGI(TAG, "remote control HTTP server reachable at http://%s/", ip);
+        vTaskDelay(pdMS_TO_TICKS(2000));
+    }
+}
+#elif CONFIG_LAUNCHER_NET_REMOTE_TRANSPORT_BLE
+static void run_ble_remote(void *arg) {
+    (void)arg;
+    net_remote_ble_start();
+}
+#endif
+#endif
+
+#if CONFIG_LAUNCHER_NET_OTA_ENABLE
+static void run_ota_flow(void *arg) {
+    net_ota_run_download_flow((const nav_input_driver_t *)arg);
+}
+#endif
+
 void app_main(void) {
     ESP_ERROR_CHECK(nvs_state_init());
 
@@ -121,16 +196,14 @@ void app_main(void) {
 #if CONFIG_LAUNCHER_NET_VERSION_CHECK_ENABLE
         display_fill_screen(DISPLAY_COLOR_BLACK);
         display_draw_text(8, 100, "VERIF. MISES A JOUR...", DISPLAY_COLOR_WHITE, DISPLAY_COLOR_BLACK, 1);
-        net_version_check_run(); /* no-op / silently skipped if WiFi unavailable, see net_wifi.c */
+        run_on_network_task(run_version_check, NULL); /* no-op / silently skipped if WiFi unavailable */
 #endif
 
 #if CONFIG_LAUNCHER_NET_REMOTE_CONTROL_ENABLE
 #if CONFIG_LAUNCHER_NET_REMOTE_TRANSPORT_HTTP
-        if (net_wifi_connect()) {
-            net_remote_http_start();
-        }
+        run_on_network_task(run_wifi_and_http_remote, NULL);
 #elif CONFIG_LAUNCHER_NET_REMOTE_TRANSPORT_BLE
-        net_remote_ble_start(); /* independent of WiFi */
+        run_on_network_task(run_ble_remote, NULL); /* independent of WiFi */
 #endif
 #endif
 
@@ -138,7 +211,7 @@ void app_main(void) {
 
 #if CONFIG_LAUNCHER_NET_OTA_ENABLE
         if (selected == (int)kAppsCount) {
-            net_ota_run_download_flow(drv);
+            run_on_network_task(run_ota_flow, (void *)drv);
             continue; /* redraw the menu, possibly with a freshly written slot */
         }
 #endif

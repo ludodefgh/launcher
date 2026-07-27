@@ -253,6 +253,21 @@ menu "Bootloader Launcher Configuration"
             default ""
             depends on LAUNCHER_NET_WIFI_ENABLE
 
+        config LAUNCHER_NET_TASK_STACK_SIZE
+            int "Taille de pile pour les operations reseau (bytes)"
+            default 8192
+            depends on LAUNCHER_NET_WIFI_ENABLE || LAUNCHER_NET_REMOTE_TRANSPORT_BLE
+            help
+                WiFi/BLE init + TLS/HTTP/cJSON (mbedtls, esp_http_client,
+                cJSON) consomment significativement plus de pile que le
+                reste du launcher. Un stack overflow a ete observe sur
+                CONFIG_ESP_MAIN_TASK_STACK_SIZE par defaut (3584) lorsque
+                ces operations tournaient inline sur la tache "main" (voir
+                issue #14) -- elles tournent maintenant sur une tache
+                dediee avec cette taille de pile a la place. Augmenter si
+                un stack overflow reapparait malgre tout (ex. avec BLE +
+                OTA + version-check combines).
+
     endmenu
 
 endmenu

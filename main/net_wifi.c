@@ -1,6 +1,7 @@
 #include "net_wifi.h"
 
 #include <string.h>
+#include <stdio.h>
 
 #include "esp_wifi.h"
 #include "esp_event.h"
@@ -25,6 +26,7 @@ static EventGroupHandle_t s_wifi_event_group;
 static bool s_stack_initialized;
 static bool s_connected;
 static int s_retry_num;
+static char s_ip_str[16]; /* "255.255.255.255" + nul */
 
 static void event_handler(void *arg, esp_event_base_t event_base, int32_t event_id, void *event_data) {
     if (event_base == WIFI_EVENT && event_id == WIFI_EVENT_STA_START) {
@@ -39,6 +41,9 @@ static void event_handler(void *arg, esp_event_base_t event_base, int32_t event_
             xEventGroupSetBits(s_wifi_event_group, WIFI_FAIL_BIT);
         }
     } else if (event_base == IP_EVENT && event_id == IP_EVENT_STA_GOT_IP) {
+        ip_event_got_ip_t *event = (ip_event_got_ip_t *)event_data;
+        snprintf(s_ip_str, sizeof(s_ip_str), IPSTR, IP2STR(&event->ip_info.ip));
+        ESP_LOGI(TAG, "got IP: %s", s_ip_str);
         s_retry_num = 0;
         s_connected = true;
         xEventGroupSetBits(s_wifi_event_group, WIFI_CONNECTED_BIT);
@@ -82,6 +87,15 @@ void net_wifi_save_credentials(const char *ssid, const char *password) {
 
 bool net_wifi_is_connected(void) {
     return s_connected;
+}
+
+bool net_wifi_get_ip_string(char *buf, size_t buf_len) {
+    if (!s_connected || s_ip_str[0] == '\0') {
+        return false;
+    }
+    strncpy(buf, s_ip_str, buf_len - 1);
+    buf[buf_len - 1] = '\0';
+    return true;
 }
 
 bool net_wifi_connect(void) {
