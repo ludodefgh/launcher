@@ -252,10 +252,19 @@ void net_ota_run_download_flow(const nav_input_driver_t *drv) {
         return; /* cancelled */
     }
 
+    /* Overwriting a slot that already has something flashed is more
+     * consequential than just looking at the main menu, so this picker
+     * spells out "(occupe)" vs "(vide)" explicitly -- see issue #22
+     * comment. Uses app_registry_slot_is_flashed() (a boolean check), not
+     * the image's own project_name, for the same reason as the main menu:
+     * unreliable for non-ESP-IDF-native build systems. */
+    static char slot_label_bufs[64][40];
     const char *slot_labels[64];
     size_t slot_count = kAppsCount < 64 ? kAppsCount : 64;
     for (size_t i = 0; i < slot_count; i++) {
-        slot_labels[i] = kApps[i].display_name;
+        const char *status = app_registry_slot_is_flashed(i) ? " (occupe)" : " (vide)";
+        snprintf(slot_label_bufs[i], sizeof(slot_label_bufs[i]), "%s%s", kApps[i].display_name, status);
+        slot_labels[i] = slot_label_bufs[i];
     }
     int slot_idx = run_picker(drv, "CHOISIR SLOT CIBLE", slot_labels, (int)slot_count);
     if (slot_idx < 0) {
