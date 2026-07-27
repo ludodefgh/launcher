@@ -13,6 +13,8 @@
 #include <stdio.h>
 #include "freertos/FreeRTOS.h"
 #include "freertos/queue.h"
+#include "esp_partition.h"
+#include "esp_ota_ops.h"
 
 #define TITLE_Y     8
 #define TITLE_SCALE 2
@@ -39,6 +41,24 @@ static int total_row_count(void) {
     return (int)kAppsCount + EXTRA_ROW_COUNT;
 }
 
+/* Prefer the project_name baked into the slot's actual flashed image over
+ * the static kApps[] placeholder -- lets e.g. an OTA-downloaded app replace
+ * a "Slot N (vide)" label without a firmware rebuild (see issue #22). Falls
+ * back to the static label when the partition has never been flashed (no
+ * valid esp_app_desc_t), which is the real "empty" case. Called directly
+ * from draw_row() -- this is a couple of cheap flash header reads, not
+ * worth caching against a menu that only redraws on nav events. */
+static const char *resolve_display_name(int i, char *buf, size_t buf_len) {
+    const esp_partition_t *part =
+        esp_partition_find_first(ESP_PARTITION_TYPE_APP, ESP_PARTITION_SUBTYPE_ANY, kApps[i].partition_label);
+    esp_app_desc_t desc;
+    if (part != NULL && esp_ota_get_partition_description(part, &desc) == ESP_OK) {
+        snprintf(buf, buf_len, "%s", desc.project_name);
+        return buf;
+    }
+    return kApps[i].display_name;
+}
+
 /* Redraws a single row in either its selected or unselected appearance.
  * Splitting this out from draw_menu_full() is what lets a nav event only
  * touch the (at most) two rows that actually changed instead of clearing
@@ -60,7 +80,9 @@ static void draw_row(int i, bool is_selected) {
             update_suffix = " (MAJ)";
         }
 #endif
-        snprintf(line, sizeof(line), "%c %s%s", is_selected ? '>' : ' ', kApps[i].display_name, update_suffix);
+        char name_buf[sizeof(((esp_app_desc_t *)0)->project_name)];
+        const char *display_name = resolve_display_name(i, name_buf, sizeof(name_buf));
+        snprintf(line, sizeof(line), "%c %s%s", is_selected ? '>' : ' ', display_name, update_suffix);
     } else {
         snprintf(line, sizeof(line), "%c Telecharger un programme", is_selected ? '>' : ' ');
     }

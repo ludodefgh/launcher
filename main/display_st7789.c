@@ -55,7 +55,16 @@ static esp_lcd_panel_handle_t s_panel;
  * most of the fix for issue #19 (240 transactions for a full-screen clear
  * down to ~8). */
 #define FILL_CHUNK_ROWS 32
-static uint16_t s_line_buf[DISPLAY_WIDTH * FILL_CHUNK_ROWS];
+/* Ping-ponged: esp_lcd_panel_draw_bitmap() hands the buffer straight to the
+ * SPI driver's DMA queue and can return before the hardware has actually
+ * finished reading it (see issue #21) -- reusing a single static buffer on
+ * the very next call risks overwriting still-in-flight pixel data. The
+ * driver drains all prior in-flight transactions at the start of its next
+ * command, so alternating between two buffers guarantees one full
+ * intervening call's worth of drain time before a given buffer is touched
+ * again. */
+static uint16_t s_line_buf[2][DISPLAY_WIDTH * FILL_CHUNK_ROWS];
+static int s_line_buf_idx;
 
 static void fill_area(int x, int y, int w, int h, display_color_t color) {
     if (w <= 0 || h <= 0 || s_panel == NULL) {
@@ -69,15 +78,17 @@ static void fill_area(int x, int y, int w, int h, display_color_t color) {
         return;
     }
 
+    uint16_t *buf = s_line_buf[s_line_buf_idx ^= 1];
+
     int first_chunk_rows = h < FILL_CHUNK_ROWS ? h : FILL_CHUNK_ROWS;
     for (int i = 0; i < w * first_chunk_rows; i++) {
-        s_line_buf[i] = color;
+        buf[i] = color;
     }
 
     int row = 0;
     while (row < h) {
         int chunk_rows = (h - row) < FILL_CHUNK_ROWS ? (h - row) : FILL_CHUNK_ROWS;
-        esp_lcd_panel_draw_bitmap(s_panel, x, y + row, x + w, y + row + chunk_rows, s_line_buf);
+        esp_lcd_panel_draw_bitmap(s_panel, x, y + row, x + w, y + row + chunk_rows, buf);
         row += chunk_rows;
     }
 }
@@ -165,9 +176,14 @@ void display_fill_rect(int x, int y, int w, int h, display_color_t color) {
     fill_area(x, y, w, h, color);
 }
 
-/* 6*MAX_GLYPH_SCALE wide (5 font columns + 1 spacer) x 7*MAX_GLYPH_SCALE tall. */
+/* 6*MAX_GLYPH_SCALE wide (5 font columns + 1 spacer) x 7*MAX_GLYPH_SCALE tall.
+ * Ping-ponged for the same reason as s_line_buf above (issue #21): back-to-back
+ * draw_glyph() calls (one per character in display_draw_text()'s loop) would
+ * otherwise overwrite a shared buffer while its previous contents might still
+ * be in flight over SPI/DMA, producing garbled glyphs. */
 #define MAX_GLYPH_SCALE 6
-static uint16_t s_glyph_buf[6 * MAX_GLYPH_SCALE * 7 * MAX_GLYPH_SCALE];
+static uint16_t s_glyph_buf[2][6 * MAX_GLYPH_SCALE * 7 * MAX_GLYPH_SCALE];
+static int s_glyph_buf_idx;
 
 static void draw_glyph(int x, int y, char ch, display_color_t fg, display_color_t bg, int scale) {
     ch = (char)toupper((unsigned char)ch);
@@ -191,6 +207,7 @@ static void draw_glyph(int x, int y, char ch, display_color_t fg, display_color_
      * instead of up to 35 tiny per-pixel-block transactions -- this is what
      * actually made text-heavy screens slow (see issue #19), fill_area()'s
      * own chunking helps but text was the dominant cost. */
+    uint16_t *buf = s_glyph_buf[s_glyph_buf_idx ^= 1];
     for (int gy = 0; gy < glyph_h; gy++) {
         int font_row = gy / scale;
         for (int gx = 0; gx < glyph_w; gx++) {
@@ -199,10 +216,10 @@ static void draw_glyph(int x, int y, char ch, display_color_t fg, display_color_
                 int font_col = gx / scale;
                 on = (cols[font_col] & (1 << font_row)) != 0;
             }
-            s_glyph_buf[gy * glyph_w + gx] = on ? fg : bg;
+            buf[gy * glyph_w + gx] = on ? fg : bg;
         }
     }
-    esp_lcd_panel_draw_bitmap(s_panel, x, y, x + glyph_w, y + glyph_h, s_glyph_buf);
+    esp_lcd_panel_draw_bitmap(s_panel, x, y, x + glyph_w, y + glyph_h, buf);
 }
 
 void display_draw_text(int x, int y, const char *text, display_color_t fg, display_color_t bg, int scale) {
