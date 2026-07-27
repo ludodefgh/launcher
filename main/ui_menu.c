@@ -53,7 +53,7 @@ static void draw_row(int i, bool is_selected) {
 
     display_fill_rect(0, y - 2, display_width(), ROW_HEIGHT, bg);
 
-    char line[40];
+    char line[64];
     if (i < (int)kAppsCount) {
         const char *update_suffix = "";
 #if CONFIG_LAUNCHER_NET_VERSION_CHECK_ENABLE
@@ -63,9 +63,16 @@ static void draw_row(int i, bool is_selected) {
 #endif
         char name_buf[NVS_STATE_SLOT_NAME_LEN];
         const char *display_name = app_registry_resolve_label(i, name_buf, sizeof(name_buf));
+        char version_suffix[APP_REGISTRY_VERSION_SUFFIX_LEN];
+        app_registry_format_version_suffix(i, version_suffix, sizeof(version_suffix));
         const char *empty_suffix = app_registry_slot_is_flashed(i) ? "" : " (vide)";
-        snprintf(line, sizeof(line), "%c %s%s%s", is_selected ? '>' : ' ', display_name, empty_suffix,
-                 update_suffix);
+        /* %.20s: display_name's real bound (NVS_STATE_SLOT_NAME_LEN) isn't
+         * visible to the compiler through the function-return pointer --
+         * cap explicitly so this is statically safe under
+         * -Wformat-truncation, and so the row stays a reasonable width on
+         * screen. */
+        snprintf(line, sizeof(line), "%c %.20s%s%s%s", is_selected ? '>' : ' ', display_name, version_suffix,
+                 empty_suffix, update_suffix);
     } else {
         snprintf(line, sizeof(line), "%c Telecharger un programme", is_selected ? '>' : ' ');
     }

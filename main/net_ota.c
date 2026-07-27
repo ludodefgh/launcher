@@ -54,7 +54,7 @@ static void draw_picker(const char *title, const char **labels, int count, int s
         display_color_t bg = is_selected ? DISPLAY_COLOR_WHITE : DISPLAY_COLOR_BLACK;
         display_color_t fg = is_selected ? DISPLAY_COLOR_BLACK : DISPLAY_COLOR_WHITE;
         display_fill_rect(0, y - 2, display_width(), ROW_HEIGHT, bg);
-        char line[40];
+        char line[48]; /* matches ui_menu.c's draw_row() line buffer -- see issue #22 follow-up */
         snprintf(line, sizeof(line), "%c %s", is_selected ? '>' : ' ', labels[i]);
         display_draw_text(MARGIN_X, y, line, fg, bg, ENTRY_SCALE);
     }
@@ -244,9 +244,24 @@ void net_ota_run_download_flow(const nav_input_driver_t *drv) {
         return;
     }
 
+    /* Shows the manifest's own (candidate/remote) version next to each
+     * entry's name, when the manifest provides one -- distinct from the
+     * "currently installed" version shown below, but same " v<version>"
+     * formatting for a consistent look. */
+    static char app_label_bufs[NET_MANIFEST_MAX_ENTRIES][NET_MANIFEST_NAME_LEN + NET_MANIFEST_VERSION_LEN + 4];
     const char *app_labels[NET_MANIFEST_MAX_ENTRIES];
     for (size_t i = 0; i < manifest.count; i++) {
-        app_labels[i] = manifest.entries[i].name[0] != '\0' ? manifest.entries[i].name : manifest.entries[i].url;
+        const char *name = manifest.entries[i].name[0] != '\0' ? manifest.entries[i].name : manifest.entries[i].url;
+        const char *version = manifest.entries[i].version;
+        /* %.40s: name can fall back to entry->url (up to NET_MANIFEST_URL_LEN,
+         * 256 bytes) -- cap explicitly so this is statically safe under
+         * -Wformat-truncation and the row stays a reasonable width. */
+        if (version[0] != '\0') {
+            snprintf(app_label_bufs[i], sizeof(app_label_bufs[i]), "%.40s v%.15s", name, version);
+        } else {
+            snprintf(app_label_bufs[i], sizeof(app_label_bufs[i]), "%.40s", name);
+        }
+        app_labels[i] = app_label_bufs[i];
     }
     int app_idx = run_picker(drv, "CHOISIR PROGRAMME", app_labels, (int)manifest.count);
     if (app_idx < 0) {
@@ -257,16 +272,24 @@ void net_ota_run_download_flow(const nav_input_driver_t *drv) {
      * consequential than just looking at the main menu, so this picker
      * spells out "(occupe)" vs "(vide)" explicitly -- see issue #22
      * comment. Uses app_registry_slot_is_flashed() (a boolean check), not
-     * the image's own project_name, for the same reason as the main menu:
-     * unreliable for non-ESP-IDF-native build systems. */
-    static char slot_label_bufs[64][40];
+     * the image's own project_name, for the same reason as the main menu.
+     * Version suffix uses the exact same app_registry_format_version_suffix()
+     * as ui_menu.c's main menu, so this picker and the main menu are
+     * guaranteed to show the same thing for the same slot. */
+    static char slot_label_bufs[64][56];
     const char *slot_labels[64];
     size_t slot_count = kAppsCount < 64 ? kAppsCount : 64;
     for (size_t i = 0; i < slot_count; i++) {
         char name_buf[NVS_STATE_SLOT_NAME_LEN];
         const char *base_name = app_registry_resolve_label(i, name_buf, sizeof(name_buf));
+        char version_suffix[APP_REGISTRY_VERSION_SUFFIX_LEN];
+        app_registry_format_version_suffix(i, version_suffix, sizeof(version_suffix));
         const char *status = app_registry_slot_is_flashed(i) ? " (occupe)" : " (vide)";
-        snprintf(slot_label_bufs[i], sizeof(slot_label_bufs[i]), "%s%s", base_name, status);
+        /* %.20s: matches ui_menu.c's draw_row() cap on the same
+         * app_registry_resolve_label() return, both for
+         * -Wformat-truncation safety and so the two screens truncate a
+         * long name the same way -- see issue #22 follow-up. */
+        snprintf(slot_label_bufs[i], sizeof(slot_label_bufs[i]), "%.20s%s%s", base_name, version_suffix, status);
         slot_labels[i] = slot_label_bufs[i];
     }
     int slot_idx = run_picker(drv, "CHOISIR SLOT CIBLE", slot_labels, (int)slot_count);

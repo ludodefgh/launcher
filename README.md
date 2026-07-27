@@ -262,6 +262,18 @@ reusing/extending this repo:
   flow, the recorded name can go stale (there's nothing in the image to
   cross-check it against, by design) until the next OTA download to that
   slot overwrites it again.
+  A version number (` v<version>`) is shown next to the name wherever a
+  version is available: the *locally installed* version
+  (`esp_app_desc_t.version`, via `app_registry_get_version()` — this field
+  doesn't have the same build-system-name problem `project_name` does, it's
+  just a version string) on both the main menu and the OTA target-slot
+  picker, and the *manifest's own candidate* version on the OTA
+  program-selection picker (a different, remote concept, shown with the
+  same formatting for visual consistency). The main menu and the
+  target-slot picker are guaranteed to format the installed-version part
+  identically because both call the same
+  `app_registry_format_version_suffix()` rather than each formatting their
+  own copy.
 
 ## Network features (optional, off by default)
 
