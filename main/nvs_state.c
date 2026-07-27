@@ -60,6 +60,25 @@ esp_err_t nvs_state_set_last_app(const char *label) {
     return err;
 }
 
+esp_err_t nvs_state_clear_last_app(void) {
+    nvs_handle_t handle;
+    esp_err_t err = nvs_open(NVS_NAMESPACE, NVS_READWRITE, &handle);
+    if (err == ESP_ERR_NVS_NOT_FOUND) {
+        return ESP_OK; /* nothing to clear */
+    } else if (err != ESP_OK) {
+        return err;
+    }
+    err = nvs_erase_key(handle, KEY_LAST_APP);
+    if (err == ESP_ERR_NVS_NOT_FOUND) {
+        err = ESP_OK; /* already cleared / never set */
+    }
+    if (err == ESP_OK) {
+        err = nvs_commit(handle);
+    }
+    nvs_close(handle);
+    return err;
+}
+
 esp_err_t nvs_state_consume_force_menu(bool *out_force_menu) {
     *out_force_menu = false;
     nvs_handle_t handle;

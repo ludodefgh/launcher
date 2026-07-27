@@ -286,6 +286,22 @@ reusing/extending this repo:
     double-write only runs for a deliberate new pick (menu selection,
     remote-control boot-by-label, a fresh OTA destination) — an automatic
     direct-boot passes `false` and leaves otadata completely undisturbed.
+  - **Even that fix doesn't close the loop by itself.** Tracing the full
+    scenario through: once the bootloader's own rollback state machine
+    correctly exhausts both otadata records and falls back to `factory`,
+    `app_main()` regains control — but `nvs_state`'s "last app" still points
+    at the exact same slot, unchanged, since nothing ever told it otherwise.
+    `boot_logic_decide()` has zero visibility into otadata/rollback state,
+    so it immediately returns `BOOT_ACTION_BOOT_DIRECT` again, and
+    `boot_into()` re-arms a fresh cycle for the same slot before the user
+    ever sees the menu — the brief `factory` landing is real but invisible,
+    undone within the same boot. `app_main()` now calls
+    `esp_ota_get_state_partition()` on the remembered app before deciding;
+    if the bootloader has already flagged it `ESP_OTA_IMG_ABORTED` or
+    `_INVALID`, it forces the menu instead and calls the new
+    `nvs_state_clear_last_app()` (erases the NVS key outright, not just an
+    empty string) so the launcher stays parked at the menu rather than
+    re-checking and re-forcing it on every subsequent boot too.
   - **This is a real, new requirement on every guest app** (a change from
     the original design goal of needing zero guest cooperation, explicitly
     accepted as a fair tradeoff when this was revisited): each guest must

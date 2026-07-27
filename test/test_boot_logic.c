@@ -67,6 +67,13 @@ static void test_decide_shows_menu_when_all_conditions_true(void) {
     CHECK(boot_logic_decide(&in) == BOOT_ACTION_SHOW_MENU, "should show menu: all conditions true at once");
 }
 
+static void test_decide_shows_menu_when_last_app_flagged_unhealthy(void) {
+    boot_decision_input_t in = make_input(true, "app_slot1", false, false);
+    in.last_app_flagged_unhealthy = true;
+    CHECK(boot_logic_decide(&in) == BOOT_ACTION_SHOW_MENU,
+          "should show menu: last app flagged unhealthy by rollback, issue #27 follow-up");
+}
+
 static void test_valid_app_magic(void) {
     CHECK(boot_logic_is_valid_app_magic(0xE9) == true, "0xE9 is the ESP-IDF app image magic byte");
     CHECK(boot_logic_is_valid_app_magic(0x00) == false, "0x00 (erased/never-flashed flash) is not valid");
@@ -79,6 +86,7 @@ int main(void) {
     test_decide_shows_menu_when_force_menu_set();
     test_decide_shows_menu_when_button_held();
     test_decide_shows_menu_when_all_conditions_true();
+    test_decide_shows_menu_when_last_app_flagged_unhealthy();
     test_valid_app_magic();
 
     printf("%d/%d checks passed\n", g_checks - g_failures, g_checks);

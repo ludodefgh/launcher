@@ -6,6 +6,8 @@
 #include "freertos/FreeRTOS.h"
 #include "freertos/task.h"
 #include "esp_log.h"
+#include "esp_ota_ops.h"
+#include "esp_partition.h"
 #include "sdkconfig.h"
 
 #include "nvs_state.h"
@@ -41,6 +43,35 @@ static const char *TAG = "launcher";
 #define LAUNCHER_SUPPORTED_CLIENT_PROTOCOL_VERSION 1
 
 static bool s_display_ready;
+
+/* Issue #27 follow-up: even with boot_into()'s fresh_selection fix, once
+ * ESP-IDF's app-rollback mechanism has flagged the remembered app unhealthy
+ * (ESP_OTA_IMG_ABORTED/INVALID) and the bootloader has fallen back to this
+ * launcher, app_main() would otherwise have no way to know that happened --
+ * it would just see "last app" still points at that same slot and
+ * immediately retry it via ordinary direct-boot logic, re-arming a fresh
+ * rollback cycle before the user ever sees the menu. Checking the
+ * partition's own recorded otadata state closes that gap. Only meaningful
+ * when rollback is enabled -- without it, otadata state never leaves
+ * ESP_OTA_IMG_UNDEFINED, so this always returns false anyway, but the #if
+ * skips a pointless flash read. */
+static bool last_app_was_flagged_unhealthy(const char *partition_label) {
+#if CONFIG_BOOTLOADER_APP_ROLLBACK_ENABLE
+    const esp_partition_t *part =
+        esp_partition_find_first(ESP_PARTITION_TYPE_APP, ESP_PARTITION_SUBTYPE_ANY, partition_label);
+    if (part == NULL) {
+        return false;
+    }
+    esp_ota_img_states_t state;
+    if (esp_ota_get_state_partition(part, &state) != ESP_OK) {
+        return false;
+    }
+    return state == ESP_OTA_IMG_ABORTED || state == ESP_OTA_IMG_INVALID;
+#else
+    (void)partition_label;
+    return false;
+#endif
+}
 
 static void check_client_protocol_version(void) {
     uint32_t version = 0;
@@ -168,6 +199,18 @@ void app_main(void) {
     ESP_ERROR_CHECK(nvs_state_consume_force_menu(&decision_input.force_menu));
     decision_input.button_held = drv->is_button_held();
     check_client_protocol_version();
+
+    if (decision_input.has_last_app && last_app_was_flagged_unhealthy(decision_input.last_app_partition)) {
+        ESP_LOGW(TAG,
+                 "'%s' was flagged unhealthy by the crash-loop rollback mechanism -- "
+                 "forcing menu and forgetting it",
+                 decision_input.last_app_partition);
+        decision_input.last_app_flagged_unhealthy = true;
+        esp_err_t clear_err = nvs_state_clear_last_app();
+        if (clear_err != ESP_OK) {
+            ESP_LOGW(TAG, "nvs_state_clear_last_app failed: %s", esp_err_to_name(clear_err));
+        }
+    }
 
     boot_action_t action = boot_logic_decide(&decision_input);
 

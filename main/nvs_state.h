@@ -22,6 +22,15 @@ esp_err_t nvs_state_get_last_app(char *out_label, size_t out_label_size, bool *o
 
 esp_err_t nvs_state_set_last_app(const char *label);
 
+/* Erases the "last_app_partition" key entirely (not just an empty string --
+ * a later nvs_state_get_last_app() must see *out_found = false, the same as
+ * if it had never been written). Used when the remembered app gets flagged
+ * unhealthy by rollback (issue #27 follow-up): forgetting it outright is
+ * what actually parks the launcher at the menu instead of re-checking and
+ * re-forcing the menu for the same known-bad slot on every subsequent
+ * boot. */
+esp_err_t nvs_state_clear_last_app(void);
+
 /* Reads "force_menu" and resets it to false in the same call (consumed-once
  * semantics per the launcher/guest-app contract, see launcher_client.h). */
 esp_err_t nvs_state_consume_force_menu(bool *out_force_menu);

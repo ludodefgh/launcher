@@ -3,7 +3,8 @@
 #define ESP_IMAGE_HEADER_MAGIC 0xE9
 
 boot_action_t boot_logic_decide(const boot_decision_input_t *input) {
-    if (input->force_menu || input->button_held || !input->has_last_app) {
+    if (input->force_menu || input->button_held || !input->has_last_app ||
+        input->last_app_flagged_unhealthy) {
         return BOOT_ACTION_SHOW_MENU;
     }
     return BOOT_ACTION_BOOT_DIRECT;
