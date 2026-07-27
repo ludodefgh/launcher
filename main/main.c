@@ -180,7 +180,10 @@ void app_main(void) {
             vTaskDelay(pdMS_TO_TICKS(CONFIG_LAUNCHER_BOOT_SPLASH_MS));
         }
 #endif
-        esp_err_t err = boot_into(decision_input.last_app_partition);
+        /* fresh_selection=false: an automatic direct-boot must leave
+         * otadata undisturbed for rollback crash-loop detection to work --
+         * see boot_into.h, issue #27. */
+        esp_err_t err = boot_into(decision_input.last_app_partition, false);
         /* Only reached if boot_into() failed -- esp_restart() never returns on success. */
         ESP_LOGW(TAG, "direct boot failed (%s), falling back to menu", esp_err_to_name(err));
         show_error_and_wait("Program not found or", "partition not flashed.");
@@ -217,7 +220,9 @@ void app_main(void) {
 
         ESP_ERROR_CHECK(nvs_state_set_last_app(label));
 
-        esp_err_t err = boot_into(label);
+        /* fresh_selection=true: this is a deliberate new pick from the
+         * menu -- see boot_into.h, issue #27. */
+        esp_err_t err = boot_into(label, true);
         /* Only reached on failure -- stay in the menu instead of crash-looping. */
         ESP_LOGW(TAG, "boot into '%s' failed (%s)", label, esp_err_to_name(err));
         char name_buf[NVS_STATE_SLOT_NAME_LEN];

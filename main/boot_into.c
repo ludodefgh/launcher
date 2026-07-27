@@ -9,7 +9,7 @@
 
 static const char *TAG = "boot_into";
 
-esp_err_t boot_into(const char *partition_label) {
+esp_err_t boot_into(const char *partition_label, bool fresh_selection) {
     const esp_partition_t *part =
         esp_partition_find_first(ESP_PARTITION_TYPE_APP, ESP_PARTITION_SUBTYPE_ANY, partition_label);
     if (part == NULL) {
@@ -62,12 +62,22 @@ esp_err_t boot_into(const char *partition_label) {
      * records within two cycles and falls through to the factory partition
      * (this launcher). The guest app must still call
      * esp_ota_mark_app_valid_cancel_rollback() early in its own startup --
-     * see README.md. */
-    esp_err_t second_err = esp_ota_set_boot_partition(part);
-    if (second_err != ESP_OK) {
-        ESP_LOGW(TAG, "second esp_ota_set_boot_partition('%s') failed: %s -- rollback safety net may be weaker "
-                      "this boot (a stale otadata record could survive), continuing anyway",
-                 partition_label, esp_err_to_name(second_err));
+     * see README.md.
+     *
+     * ONLY do this on a fresh_selection, not on an automatic direct-boot --
+     * issue #27, tested on real hardware: applying it unconditionally on
+     * every boot_into() call, including the direct-boot that runs right
+     * after a crash, wiped out the exact PENDING_VERIFY/NEW state the
+     * bootloader's own rollback logic depends on to notice a crash-loop in
+     * the first place, silently defeating rollback on every single cycle.
+     * A direct-boot must leave otadata completely undisturbed. */
+    if (fresh_selection) {
+        esp_err_t second_err = esp_ota_set_boot_partition(part);
+        if (second_err != ESP_OK) {
+            ESP_LOGW(TAG, "second esp_ota_set_boot_partition('%s') failed: %s -- rollback safety net may be weaker "
+                          "this boot (a stale otadata record could survive), continuing anyway",
+                     partition_label, esp_err_to_name(second_err));
+        }
     }
 #endif
 

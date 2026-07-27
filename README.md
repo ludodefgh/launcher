@@ -266,11 +266,26 @@ reusing/extending this repo:
     actual flash bytes are the new, broken image. That's not a rollback at
     all, just a silent, **permanent** false positive: the same crash-looping
     bytes reboot forever, now marked as if trusted. `boot_into.c` calls
-    `esp_ota_set_boot_partition()` a second time on every boot to
-    compensate: the second call always targets whichever sector the first
-    call left untouched, so both converge on the same slot with a fresh
-    `NEW` state, and a genuine crash-loop correctly exhausts both records
-    within two cycles and falls through to `factory` (this launcher).
+    `esp_ota_set_boot_partition()` a second time to compensate: the second
+    call always targets whichever sector the first call left untouched, so
+    both converge on the same slot with a fresh `NEW` state, and a genuine
+    crash-loop correctly exhausts both records within two cycles and falls
+    through to `factory` (this launcher).
+  - **Attempt 2 shipped with a bug that defeated it just as completely as
+    attempt 1 — issue #27, also caught on real hardware.** The compensating
+    double-write above was applied unconditionally on *every* `boot_into()`
+    call, including the automatic direct-boot that runs right after a
+    crash — which wiped out the exact `PENDING_VERIFY`/`NEW` state the
+    bootloader's own rollback logic depends on to notice "this slot never
+    confirmed itself" in the first place. Every reboot looked like a
+    brand-new attempt, so the crash history never accumulated and rollback
+    could never trigger — the fix for the stale-otadata-record problem and
+    the thing it was meant to protect needed opposite things from the same
+    state, on a path (direct-boot) where the stale-record problem doesn't
+    even apply. `boot_into()` now takes a `fresh_selection` bool: the
+    double-write only runs for a deliberate new pick (menu selection,
+    remote-control boot-by-label, a fresh OTA destination) — an automatic
+    direct-boot passes `false` and leaves otadata completely undisturbed.
   - **This is a real, new requirement on every guest app** (a change from
     the original design goal of needing zero guest cooperation, explicitly
     accepted as a fair tradeoff when this was revisited): each guest must

@@ -79,7 +79,9 @@ static esp_err_t boot_handler(httpd_req_t *req) {
     }
 
     ESP_LOGI(TAG, "remote boot request for '%s'", slot);
-    esp_err_t err = boot_into(slot);
+    /* fresh_selection=true: a deliberate pick, same as a menu selection --
+     * see boot_into.h, issue #27. */
+    esp_err_t err = boot_into(slot, true);
     /* Only reached if boot_into() failed -- esp_restart() never returns on success,
      * so the client will just see the connection drop, which is expected. */
     ESP_LOGW(TAG, "remote boot into '%s' failed: %s", slot, esp_err_to_name(err));
