@@ -331,6 +331,15 @@ void net_ota_run_download_flow(const nav_input_driver_t *drv) {
         if (name_err != ESP_OK) {
             ESP_LOGW(TAG, "nvs_state_set_slot_name(%d) failed: %s", slot_idx, esp_err_to_name(name_err));
         }
+        /* Same rationale as the name above -- esp_app_desc_t.version is
+         * just as unreliable for PlatformIO/Arduino-framework guests, see
+         * issue #26. Only record if the manifest actually provided one. */
+        if (entry->version[0] != '\0') {
+            esp_err_t version_err = nvs_state_set_slot_version((size_t)slot_idx, entry->version);
+            if (version_err != ESP_OK) {
+                ESP_LOGW(TAG, "nvs_state_set_slot_version(%d) failed: %s", slot_idx, esp_err_to_name(version_err));
+            }
+        }
         show_message("DONE", "returning to menu...");
     } else {
         show_message("DOWNLOAD FAILED", esp_err_to_name(err));

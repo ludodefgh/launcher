@@ -157,3 +157,52 @@ esp_err_t nvs_state_set_slot_name(size_t slot_index, const char *name) {
     nvs_close(handle);
     return err;
 }
+
+static void slot_version_key(size_t slot_index, char *out_key, size_t out_key_size) {
+    snprintf(out_key, out_key_size, "slot_ver%u", (unsigned)slot_index);
+}
+
+esp_err_t nvs_state_get_slot_version(size_t slot_index, char *out_version, size_t out_version_size, bool *out_found) {
+    *out_found = false;
+    if (slot_index >= NVS_STATE_MAX_APP_SLOTS) {
+        return ESP_ERR_INVALID_ARG;
+    }
+    nvs_handle_t handle;
+    esp_err_t err = nvs_open(NVS_NAMESPACE, NVS_READONLY, &handle);
+    if (err == ESP_ERR_NVS_NOT_FOUND) {
+        return ESP_OK;
+    } else if (err != ESP_OK) {
+        return err;
+    }
+
+    char key[16];
+    slot_version_key(slot_index, key, sizeof(key));
+    err = nvs_get_str(handle, key, out_version, &out_version_size);
+    nvs_close(handle);
+    if (err == ESP_ERR_NVS_NOT_FOUND) {
+        return ESP_OK;
+    } else if (err != ESP_OK) {
+        return err;
+    }
+    *out_found = true;
+    return ESP_OK;
+}
+
+esp_err_t nvs_state_set_slot_version(size_t slot_index, const char *version) {
+    if (slot_index >= NVS_STATE_MAX_APP_SLOTS) {
+        return ESP_ERR_INVALID_ARG;
+    }
+    nvs_handle_t handle;
+    esp_err_t err = nvs_open(NVS_NAMESPACE, NVS_READWRITE, &handle);
+    if (err != ESP_OK) {
+        return err;
+    }
+    char key[16];
+    slot_version_key(slot_index, key, sizeof(key));
+    err = nvs_set_str(handle, key, version);
+    if (err == ESP_OK) {
+        err = nvs_commit(handle);
+    }
+    nvs_close(handle);
+    return err;
+}

@@ -101,6 +101,20 @@ bool app_registry_get_version(size_t i, char *out_version, size_t out_version_le
     if (i >= s_count) {
         return false;
     }
+
+    /* Prefer the version recorded from the OTA manifest at download time
+     * over esp_app_desc_t.version -- that field is just as unreliable for
+     * non-ESP-IDF-native build systems as project_name was (issue #22):
+     * PlatformIO/Arduino-framework guests populate it with an internal
+     * build-tool string (e.g. a short git hash), not the guest's own
+     * version -- see issue #26. Falls back to esp_app_desc_t.version only
+     * for slots never OTA-downloaded through the launcher. */
+    bool found = false;
+    if (nvs_state_get_slot_version(i, out_version, out_version_len, &found) == ESP_OK && found &&
+        out_version[0] != '\0') {
+        return true;
+    }
+
     const esp_partition_t *part =
         esp_partition_find_first(ESP_PARTITION_TYPE_APP, ESP_PARTITION_SUBTYPE_ANY, s_partition_labels[i]);
     esp_app_desc_t desc;

@@ -55,6 +55,24 @@ esp_err_t nvs_state_get_protocol_version(uint32_t *out_version);
 esp_err_t nvs_state_get_slot_name(size_t slot_index, char *out_name, size_t out_name_size, bool *out_found);
 esp_err_t nvs_state_set_slot_name(size_t slot_index, const char *name);
 
+/* Sized to comfortably hold both a net_manifest_entry_t.version
+ * (NET_MANIFEST_VERSION_LEN) and an esp_app_desc_t.version (both currently
+ * 32) -- duplicated rather than shared via a header include for the same
+ * reason as NVS_STATE_SLOT_NAME_LEN above. Keep >= both if either changes. */
+#define NVS_STATE_SLOT_VERSION_LEN 32
+
+/* Per-slot app version, keyed by slot index -- same shape and rationale as
+ * nvs_state_get/set_slot_name() above, just for the version string.
+ * esp_app_desc_t.version is just as unreliable as project_name for
+ * non-ESP-IDF-native build systems: PlatformIO/Arduino-framework guests
+ * populate it with an internal build-tool string, not the guest's own
+ * version (see issue #26). Recorded by net_ota.c from the OTA manifest
+ * entry's own version field at download time. *out_found is false if this
+ * slot was never OTA-downloaded through the launcher -- callers fall back
+ * to esp_app_desc_t.version in that case (see app_registry_get_version()). */
+esp_err_t nvs_state_get_slot_version(size_t slot_index, char *out_version, size_t out_version_size, bool *out_found);
+esp_err_t nvs_state_set_slot_version(size_t slot_index, const char *version);
+
 #ifdef __cplusplus
 }
 #endif
