@@ -42,6 +42,37 @@ Guest apps only need two more things from this repo:
    across recent releases. Guest apps do **not** need to use this repo's
    devcontainer or even ESP-IDF itself (PlatformIO is fine).
 
+### Combining with a guest app: tools/merge_with_guest.py
+
+Deliberately **two independent build systems, one flash step** — the guest
+app is built entirely on its own (PlatformIO, Arduino, a second `idf.py`
+project, whatever) and handed to this script as a plain `.bin`; the script
+never touches the guest project. This is the intended way to consume this
+repo without adopting its build system or a shared/vendored-dependency
+model (see the design discussion closed in issue #11).
+
+```
+# from an ESP-IDF environment (. $IDF_PATH/export.sh, or inside .devcontainer)
+
+# dry run: builds the launcher, prints the equivalent esptool command
+tools/merge_with_guest.py --slot app_slot1 --guest-bin /path/to/guest.bin
+
+# produce a single flashable image (esptool merge_bin under the hood)
+tools/merge_with_guest.py --slot app_slot1 --guest-bin guest.bin -o combined.bin
+python -m esptool --chip esp32s3 -p PORT write_flash 0x0 combined.bin
+
+# or flash both directly to a connected board in one go
+tools/merge_with_guest.py --slot app_slot1 --guest-bin guest.bin -p /dev/ttyUSB0
+```
+
+It resolves the target slot's real offset/size from the launcher's own
+built partition table (never hand-computed, see "Design decisions" below
+for why that matters) and refuses to proceed if the guest binary is larger
+than the slot — `idf.py build`'s own overflow check is only a warning (see
+the safety note atop `partitions.csv`), so this script enforces it as a
+hard stop instead. Pass `--skip-build` to reuse an existing `build/`
+instead of rebuilding the launcher first.
+
 ## Repo layout
 
 ```
@@ -50,6 +81,7 @@ components/launcher_client/   tiny library for guest apps ("return to menu")
 partitions.csv          8MB flash layout (S3 dev boards), 3 app slots
 partitions_4mb.csv       4MB flash layout (C3 / classic WROOM), 2 app slots
 test/test_boot_logic.c  host-based unit tests for the pure boot-decision logic
+tools/merge_with_guest.py   combine the launcher with a separately-built guest .bin, see below
 .devcontainer/          build-only ESP-IDF 5.5 container, see below
 .github/workflows/      CI: build matrix (esp32/esp32s3/esp32c3) + host tests
 ```
