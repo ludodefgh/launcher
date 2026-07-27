@@ -24,11 +24,6 @@ typedef struct {
     char last_app_partition[BOOT_LOGIC_MAX_LABEL_LEN];
     bool force_menu;                             /* consumed force_menu flag from NVS */
     bool button_held;                            /* encoder button held at boot */
-    uint32_t crash_streak;                       /* consecutive fast-abnormal-reset count, already
-                                                    * updated for this boot -- see
-                                                    * boot_logic_next_crash_streak() below */
-    uint32_t crash_loop_threshold;               /* CONFIG_LAUNCHER_CRASH_LOOP_THRESHOLD; 0 disables
-                                                    * the crash-loop check entirely */
 } boot_decision_input_t;
 
 typedef enum {
@@ -37,26 +32,18 @@ typedef enum {
 } boot_action_t;
 
 /* Implements: show the menu if force_menu, or the button is held, or there
- * is no remembered app yet, or the app has crash-looped past the configured
- * threshold (see issue #23); otherwise boot straight into the remembered app. */
+ * is no remembered app yet; otherwise boot straight into the remembered app.
+ *
+ * NOTE on crash-loop recovery (issue #23): an NVS-based crash-streak counter
+ * was tried here and reverted -- confirmed on real hardware to be dead code,
+ * since esp_ota_set_boot_partition() redirects the bootloader itself
+ * permanently, so app_main() (and this function) never runs again once a
+ * guest app has been direct-booted, crash or not. Recovery is now handled at
+ * the bootloader level instead via ESP-IDF's own app-rollback mechanism
+ * (CONFIG_BOOTLOADER_APP_ROLLBACK_ENABLE, selected by
+ * CONFIG_LAUNCHER_CRASH_LOOP_RECOVERY_ENABLE) -- see boot_into.c and
+ * README.md "Design decisions". This module has no role in that anymore. */
 boot_action_t boot_logic_decide(const boot_decision_input_t *input);
-
-/* Crash-loop failsafe (issue #23): computes the next crash_streak value given
- * the streak persisted in NVS from before this boot. Only counts a "fast"
- * abnormal reset -- one where less than crash_loop_window_us elapsed between
- * the launcher last handing control to the app and this boot -- since the
- * whole point is catching an app that crashes before the user has any
- * chance to react (hold the button to force the menu); an abnormal reset
- * after the app ran fine for a while is deliberately not counted here, nor
- * is a normal reset. elapsed_us_since_boot_attempt should be negative or a
- * very large sentinel (e.g. INT64_MAX) when no prior boot attempt was
- * recorded (first boot ever) or the clock appears to have gone backwards --
- * both are treated as "not fast" rather than risking a false positive.
- * The streak is otherwise left unchanged here; it is only ever reset to 0
- * by the caller when the user deliberately reselects an app from the menu
- * (a deliberate design choice -- see README "Design decisions"). */
-uint32_t boot_logic_next_crash_streak(uint32_t current_streak, bool last_boot_abnormal,
-                                       int64_t elapsed_us_since_boot_attempt, int64_t crash_loop_window_us);
 
 /* True if the number of ota_* partitions actually found on flash matches
  * CONFIG_LAUNCHER_APP_SLOT_COUNT (caller logs a warning on mismatch, does

@@ -31,27 +31,6 @@ esp_err_t nvs_state_consume_force_menu(bool *out_force_menu);
  * menu yet) -- not treated as an error, just "unknown". */
 esp_err_t nvs_state_get_protocol_version(uint32_t *out_version);
 
-/* Crash-loop failsafe (issue #23). Records "now" as the start of a boot
- * attempt -- called by boot_into() right before handing control to an app,
- * so a later boot can tell how long that attempt lasted. Backed by
- * gettimeofday(), which ESP-IDF's default time source keeps ticking through
- * panic/watchdog resets (the RTC power domain stays up) and only resets on
- * an actual power-on -- exactly the boundary this feature cares about. */
-esp_err_t nvs_state_mark_boot_attempt_started(void);
-
-/* Elapsed microseconds since the last nvs_state_mark_boot_attempt_started()
- * call, as of now. *out_found is false if no attempt was ever recorded
- * (e.g. very first boot ever) -- caller should treat that as "not a fast
- * crash" rather than as 0 elapsed. */
-esp_err_t nvs_state_get_boot_attempt_elapsed_us(int64_t *out_elapsed_us, bool *out_found);
-
-/* Consecutive-fast-abnormal-reset counter for whatever is currently
- * "last_app" -- see boot_logic_next_crash_streak(). Reset to 0 only when the
- * user deliberately reselects an app from the menu (main.c), never merely
- * by the menu being shown. */
-esp_err_t nvs_state_get_crash_streak(uint32_t *out_streak);
-esp_err_t nvs_state_set_crash_streak(uint32_t streak);
-
 /* Sized to comfortably hold a net_manifest_entry_t.name (NET_MANIFEST_NAME_LEN,
  * currently 64) -- duplicated rather than shared via a header include since
  * nvs_state.c/h must build unconditionally, while net_manifest.h only

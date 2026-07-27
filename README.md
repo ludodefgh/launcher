@@ -16,13 +16,15 @@ rotary encoder, but the core (boot logic, HAL, Kconfig) is chip-agnostic.
   exists and the encoder button isn't held, it boots straight into it
   (`esp_ota_set_boot_partition` + `esp_restart`). Otherwise (first boot,
   forced menu, or button held) it shows a selection menu on the TFT.
-- Crash-loop failsafe: if the remembered app crashes (panic/watchdog reset)
-  within `CONFIG_LAUNCHER_CRASH_LOOP_WINDOW_MS` (default 10s) of being
-  booted, `CONFIG_LAUNCHER_CRASH_LOOP_THRESHOLD` (default 3) times in a
-  row, the launcher shows the menu instead of retrying a direct boot into
-  it — catching the case where an app crashes too fast for the user to
-  react by holding the button themselves. See issue #23 and the "Design
-  decisions" section below for exactly how the streak is tracked/reset.
+- Crash-loop recovery: if the remembered app never confirms itself healthy
+  (`esp_ota_mark_app_valid_cancel_rollback()`) before crashing, ESP-IDF's
+  bootloader-level app rollback (`CONFIG_LAUNCHER_CRASH_LOOP_RECOVERY_ENABLE`,
+  on by default) falls back to this launcher automatically — this runs
+  *before* any application code, so it catches even a crash too fast for
+  the user to react by holding the button themselves. See issue #23 and the
+  "Design decisions" section below for why this replaced an earlier,
+  app-level NVS counter that turned out not to work, and for a guest-app
+  requirement this needs.
 - A guest app can hand control back to the menu by calling
   `launcher_request_menu_on_next_boot()` from `components/launcher_client`
   (e.g. on a long button press) and rebooting. This sets `force_menu` in NVS
@@ -215,32 +217,66 @@ reusing/extending this repo:
   (the defaults) gives a correct, unmirrored landscape image; a different
   panel may need a different combination, adjustable via `menuconfig`
   without touching code.
-- **Crash-loop failsafe (`CONFIG_LAUNCHER_CRASH_LOOP_THRESHOLD`/`_WINDOW_MS`,
-  issue #23) diverges from that issue's own suggested direction in three
-  ways, all deliberate:**
-  - The crash-streak counter resets to 0 **only** when the user deliberately
-    reselects an app from the menu — not merely by the menu being shown
-    (e.g. a K0-long-press round trip). The issue's suggested text treated
-    any "normal reset" as clearing it; this project chose the stricter
-    reading so an incidental menu visit can't let a genuinely crash-looping
-    app dodge the failsafe. Tradeoff: the streak is effectively a lifetime
-    count since the app was last deliberately chosen, not a
-    strictly-consecutive-in-time one — a few isolated crashes spread over
-    months (each recovered from normally) will eventually trip it too.
-  - `ESP_RST_BROWNOUT` is **not** counted as an abnormal reset, though the
-    issue's suggested list included it. A brownout can come from external
-    power flakiness (weak USB cable/supply) unrelated to a bug in the app
-    itself; counting it risks forcing the menu for reasons the app can't
-    fix.
-  - Only counts as a "crash" if it happened within
-    `CONFIG_LAUNCHER_CRASH_LOOP_WINDOW_MS` (default 10s) of the launcher
-    handing control to the app, measured via `gettimeofday()` (backed by
-    ESP-IDF's default RTC-clock time source, which keeps ticking through
-    panic/watchdog resets and only resets on an actual power-on). Not in
-    the issue at all — added because the actual failure mode this guards
-    against is an app crashing before the user has any chance to react by
-    holding the button; a crash after the app ran fine for a while is
-    already recoverable that way and deliberately out of scope here.
+- **Crash-loop recovery (`CONFIG_LAUNCHER_CRASH_LOOP_RECOVERY_ENABLE`, issue
+  #23) went through two designs; the first shipped, then had to be reverted
+  once real-hardware testing disproved its core assumption:**
+  - **Attempt 1 (reverted): an NVS crash-streak counter checked in
+    `app_main()`.** Confirmed dead code on real hardware (debug logging
+    across 6 boots and 5 triggered crashes showed `app_main()` only ran
+    *once*): `esp_ota_set_boot_partition()` redirects the **bootloader**
+    itself, permanently, not just the next boot — so once a guest app has
+    been direct-booted, every subsequent reset (crash or not) boots straight
+    back into it via the bootloader, before any launcher C code (the
+    counter included) ever runs again. A counter living entirely in
+    `app_main()` structurally cannot catch a crash-loop it never gets to
+    observe.
+  - **Attempt 2 (current): ESP-IDF's own bootloader-level app rollback**
+    (`CONFIG_BOOTLOADER_APP_ROLLBACK_ENABLE`, selected by
+    `CONFIG_LAUNCHER_CRASH_LOOP_RECOVERY_ENABLE`). This runs in the
+    bootloader itself — before any application code — which is the layer
+    the problem actually needs to be solved at: each guest slot's otadata
+    sector tracks `NEW → PENDING_VERIFY → VALID` (once the guest calls
+    `esp_ota_mark_app_valid_cancel_rollback()`, a requirement on every guest
+    app, this launcher included nothing it can enforce), and a slot still
+    `PENDING_VERIFY` on the next boot gets marked `ABORTED`.
+  - **A real structural mismatch had to be compensated for.** ESP-IDF's
+    rollback is designed for the conventional `ota_0`/`ota_1` pattern
+    (alternate write target on every update of the *same* program, so the
+    untouched slot is always a genuine, intact previous build). This
+    launcher instead has N *fixed* slots, each an independent program,
+    re-downloaded **in place** (`net_ota.c` overwrites the exact partition
+    the user picked — there's no backup copy of the previous build
+    anywhere). Verified against the actual ESP-IDF v5.5 bootloader/
+    `app_update` source (`bootloader_utility.c`,
+    `bootloader_common_loader.c`), not assumed: `esp_ota_set_boot_partition()`
+    only rewrites whichever of the two `otadata` sectors is currently
+    *inactive*. If you re-download the slot you're *currently* running, the
+    other (untouched) sector can still hold an old `ESP_OTA_IMG_VALID`
+    record for that exact same slot from before the re-download. If the new
+    (buggy) version then crash-loops, the bootloader can "roll back" to
+    that stale record — which it trusts as already-confirmed, so it boots
+    straight in *without* re-entering `PENDING_VERIFY` — even though the
+    actual flash bytes are the new, broken image. That's not a rollback at
+    all, just a silent, **permanent** false positive: the same crash-looping
+    bytes reboot forever, now marked as if trusted. `boot_into.c` calls
+    `esp_ota_set_boot_partition()` a second time on every boot to
+    compensate: the second call always targets whichever sector the first
+    call left untouched, so both converge on the same slot with a fresh
+    `NEW` state, and a genuine crash-loop correctly exhausts both records
+    within two cycles and falls through to `factory` (this launcher).
+  - **This is a real, new requirement on every guest app** (a change from
+    the original design goal of needing zero guest cooperation, explicitly
+    accepted as a fair tradeoff when this was revisited): each guest must
+    call `esp_ota_mark_app_valid_cancel_rollback()` (standard ESP-IDF
+    `app_update` API, not launcher-specific) early in its own startup, once
+    it knows it's healthy. A guest that never calls it isn't broken —  it
+    still boots and runs fine — it just never becomes "confirmed valid",
+    so it re-enters `PENDING_VERIFY` on every single selection and rolls
+    back to `factory` on its very next crash instead of getting repeated
+    tries. That's a safe default, not a silent trap, per the issue's own
+    framing — but any *existing* guest (ASCII Aquarium included) needs this
+    change to get the intended "keeps trying a few times" behavior rather
+    than "one crash and back to the menu."
 - **App-slot menu labels never read a name out of the flashed image itself
   (issue #22).** A first attempt used `esp_app_desc_t.project_name` via
   `esp_ota_get_partition_description()`, but real-hardware testing showed

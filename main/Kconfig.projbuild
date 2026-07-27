@@ -3,230 +3,224 @@ menu "Bootloader Launcher Configuration"
     menu "Slots / partitions"
 
         config LAUNCHER_APP_SLOT_COUNT
-            int "Nombre de slots d'application"
+            int "Number of application slots"
             range 1 8
             default 3
             help
-                Nombre de partitions "app" gerees par le launcher (hors partition
-                factory du launcher lui-meme). Doit rester coherent avec le nombre
-                d'entrees ota_* declarees dans partitions.csv et avec app_registry.c
-                -- un warning est loggue au boot en cas de mismatch.
+                Number of "app" partitions managed by the launcher (excluding the
+                launcher's own factory partition). Must stay consistent with the
+                number of ota_* entries declared in partitions.csv and with
+                app_registry.c -- a mismatch is logged as a warning at boot.
 
         config LAUNCHER_APP_SLOT_SIZE
-            hex "Taille de chaque slot (bytes)"
+            hex "Size of each slot (bytes)"
             default 0x180000
             help
-                Taille appliquee a chaque partition app. Doit correspondre a ce qui
-                est declare dans partitions.csv (ou partitions_4mb.csv).
+                Size applied to each app partition. Must match what's declared in
+                partitions.csv (or partitions_4mb.csv).
 
         config LAUNCHER_FACTORY_SIZE
-            hex "Taille de la partition factory (launcher)"
+            hex "Size of the factory partition (launcher)"
             default 0x180000
             help
-                Doit correspondre a ce qui est declare dans partitions.csv.
-                0x180000 (1.5MB) plutot que le 1MB plus habituel car activer
+                Must match what's declared in partitions.csv.
+                0x180000 (1.5MB) rather than the more usual 1MB because enabling
                 LAUNCHER_NET_OTA_ENABLE + LAUNCHER_NET_VERSION_CHECK_ENABLE +
-                LAUNCHER_NET_REMOTE_CONTROL_ENABLE (BLE) en meme temps mesure
-                environ 1.25MB une fois compile (WiFi+TLS+HTTP+JSON a eux
-                seuls approchent deja 1MB, NimBLE ajoute ~250-300KB de plus).
-                Reduire si les fonctionnalites reseau ne sont pas utilisees.
+                LAUNCHER_NET_REMOTE_CONTROL_ENABLE (BLE) all at once measures
+                around 1.25MB once built (WiFi+TLS+HTTP+JSON alone already
+                approach 1MB, NimBLE adds ~250-300KB more).
+                Reduce if the network features aren't used.
 
     endmenu
 
     menu "Navigation (HAL)"
 
         choice LAUNCHER_NAV_DRIVER
-            prompt "Driver de navigation actif"
+            prompt "Active navigation driver"
             default LAUNCHER_NAV_DRIVER_EC11
             help
-                Choix du driver nav_input_driver_t compile dans le launcher.
-                Un seul driver actif a la fois en v1 (pas de detection dynamique).
+                Choice of nav_input_driver_t compiled into the launcher.
+                Only one active driver at a time in v1 (no dynamic detection).
 
             config LAUNCHER_NAV_DRIVER_EC11
-                bool "Encodeur rotatif EC11"
+                bool "EC11 rotary encoder"
 
             config LAUNCHER_NAV_DRIVER_MOCK
-                bool "Mock (evenements simules depuis la console série)"
+                bool "Mock (events simulated from the serial console)"
                 help
-                    Utile pour tester la logique de menu sans hardware branche.
+                    Useful for testing menu logic without hardware connected.
         endchoice
 
         config LAUNCHER_EC11_GPIO_CLK
-            int "GPIO EC11 - CLK (phase A)"
+            int "EC11 GPIO - CLK (phase A)"
             depends on LAUNCHER_NAV_DRIVER_EC11
             default 4
 
         config LAUNCHER_EC11_GPIO_DT
-            int "GPIO EC11 - DT (phase B)"
+            int "EC11 GPIO - DT (phase B)"
             depends on LAUNCHER_NAV_DRIVER_EC11
             default 5
 
         config LAUNCHER_EC11_GPIO_SW
-            int "GPIO EC11 - bouton poussoir"
+            int "EC11 GPIO - push button"
             depends on LAUNCHER_NAV_DRIVER_EC11
             default 6
 
         config LAUNCHER_EC11_INVERT
-            bool "Inverser le sens de rotation de l'encodeur EC11"
+            bool "Invert EC11 encoder rotation direction"
             depends on LAUNCHER_NAV_DRIVER_EC11
             default n
 
         config LAUNCHER_LONG_PRESS_MS
-            int "Seuil appui long (ms)"
+            int "Long-press threshold (ms)"
             default 3000
 
     endmenu
 
-    menu "Ecran (TFT ST7789, SPI)"
+    menu "Display (TFT ST7789, SPI)"
 
         config LAUNCHER_DISPLAY_GPIO_MOSI
-            int "GPIO SPI MOSI"
+            int "SPI MOSI GPIO"
             default 11
 
         config LAUNCHER_DISPLAY_GPIO_SCLK
-            int "GPIO SPI SCLK"
+            int "SPI SCLK GPIO"
             default 12
 
         config LAUNCHER_DISPLAY_GPIO_CS
-            int "GPIO CS"
+            int "CS GPIO"
             default 10
 
         config LAUNCHER_DISPLAY_GPIO_DC
-            int "GPIO DC (data/command)"
+            int "DC GPIO (data/command)"
             default 9
 
         config LAUNCHER_DISPLAY_GPIO_RST
-            int "GPIO RESET"
+            int "RESET GPIO"
             default 8
 
         config LAUNCHER_DISPLAY_GPIO_BL
-            int "GPIO backlight (-1 si non pilote par GPIO)"
+            int "Backlight GPIO (-1 if not GPIO-driven)"
             default 7
 
         config LAUNCHER_DISPLAY_WIDTH
-            int "Largeur ecran (px)"
+            int "Screen width (px)"
             default 320
 
         config LAUNCHER_DISPLAY_HEIGHT
-            int "Hauteur ecran (px)"
+            int "Screen height (px)"
             default 240
 
         config LAUNCHER_DISPLAY_SWAP_XY
-            bool "Inverser lignes/colonnes (swap_xy)"
+            bool "Swap rows/columns (swap_xy)"
             default y
             help
-                La plupart des modules ST7789 2.4" de ce type sont nativement
-                portrait (240x320) -- ce swap est necessaire pour obtenir une
-                image paysage (320x240) correcte. Equivalent au setRotation()
-                de TFT_eSPI. Si le menu apparait tourne de 90 degres, essayer
-                de basculer cette option.
+                Most 2.4" ST7789 modules of this type are natively portrait
+                (240x320) -- this swap is needed to get a correct landscape
+                (320x240) image. Equivalent to TFT_eSPI's setRotation(). If the
+                menu appears rotated 90 degrees, try toggling this option.
 
         config LAUNCHER_DISPLAY_MIRROR_X
-            bool "Miroir horizontal"
+            bool "Horizontal mirror"
             default y
             help
-                A ajuster au cas par cas selon le montage physique du panel.
-                default y confirme sur le hardware de reference de ce projet
-                (module ST7789 2.4", voir issue #13) -- avec
-                LAUNCHER_DISPLAY_SWAP_XY=y seul, l'image sortait inversee
-                horizontalement (texte lisible mais gauche/droite inverse);
-                SWAP_XY=y + MIRROR_X=y + MIRROR_Y=n donne l'orientation
-                paysage correcte sans miroir sur ce panel. Si l'image sort
-                inversee sur un autre module, desactiver cette option.
+                Adjust case by case depending on the panel's physical mounting.
+                default y confirmed on this project's reference hardware
+                (2.4" ST7789 module, see issue #13) -- with
+                LAUNCHER_DISPLAY_SWAP_XY=y alone, the image came out horizontally
+                flipped (text readable but left/right reversed); SWAP_XY=y +
+                MIRROR_X=y + MIRROR_Y=n gives the correct landscape orientation
+                with no mirroring on this panel. If the image comes out flipped
+                on another module, disable this option.
 
         config LAUNCHER_DISPLAY_MIRROR_Y
-            bool "Miroir vertical"
+            bool "Vertical mirror"
             default n
             help
-                Comme LAUNCHER_DISPLAY_MIRROR_X mais pour l'axe vertical.
+                Same as LAUNCHER_DISPLAY_MIRROR_X but for the vertical axis.
 
     endmenu
 
-    menu "Comportement au boot"
+    menu "Boot behavior"
 
         config LAUNCHER_BOOT_SPLASH_MS
-            int "Duree splash au boot direct (ms, 0 = desactive)"
+            int "Splash duration on direct boot (ms, 0 = disabled)"
             default 300
 
         config LAUNCHER_NVS_NAMESPACE
-            string "Namespace NVS partage launcher/apps"
+            string "NVS namespace shared by launcher/apps"
             default "launcher"
 
-        config LAUNCHER_CRASH_LOOP_THRESHOLD
-            int "Reboots anormaux rapides consecutifs avant retour force au menu (0 = desactive)"
-            default 3
+        config LAUNCHER_CRASH_LOOP_RECOVERY_ENABLE
+            bool "Enable crash-loop recovery (app rollback)"
+            default y
+            select BOOTLOADER_APP_ROLLBACK_ENABLE
             help
-                Failsafe anti-crash-loop (issue #23) : si l'app en cours
-                redémarre de façon anormale (panic, watchdog -- PAS
-                brownout, qui peut venir d'une alimentation externe
-                instable sans rapport avec un bug de l'app) moins de
-                LAUNCHER_CRASH_LOOP_WINDOW_MS après que le launcher lui a
-                cédé la main, ce boot compte comme un "crash rapide". Une
-                fois ce nombre de crashs rapides consecutifs atteint, le
-                launcher affiche le menu au lieu de retenter un boot direct.
-                Le compteur ne redescend a zero que lorsque l'utilisateur
-                re-selectionne explicitement une app depuis le menu (pas
-                juste en affichant le menu, ex. retour K0) -- volontairement
-                strict pour qu'une visite incidente du menu ne masque pas un
-                probleme reel. Un crash "lent" (apres LAUNCHER_CRASH_LOOP_WINDOW_MS)
-                ne compte pas non plus : le but est de rattraper les crashs
-                trop rapides pour que l'utilisateur ait le temps de tenir le
-                bouton K0, pas les crashs plus tardifs ou l'utilisateur a
-                deja cette option. 0 desactive completement cette detection.
+                Recovers from a guest app that crashes on every boot (bad OTA,
+                bug, whatever) by enabling ESP-IDF's bootloader-level app
+                rollback (BOOTLOADER_APP_ROLLBACK_ENABLE) -- see issue #23.
 
-        config LAUNCHER_CRASH_LOOP_WINDOW_MS
-            int "Fenetre de detection d'un crash rapide apres boot (ms)"
-            default 10000
-            help
-                Duree apres avoir cede la main a une app en dessous de
-                laquelle un reset anormal (panic/watchdog) compte comme un
-                "crash rapide" pour LAUNCHER_CRASH_LOOP_THRESHOLD -- voir
-                issue #23. Mesuree via l'horloge RTC (gettimeofday()), qui
-                continue de tourner a travers un reset panic/watchdog (le
-                domaine RTC reste alimente) et ne se reinitialise qu'a un
-                reset power-on reel.
+                An earlier attempt tracked crashes with an NVS counter checked
+                in the launcher's own app_main(), but that turned out to be
+                dead code on real hardware: esp_ota_set_boot_partition()
+                redirects the *bootloader* itself, permanently, so the
+                launcher never runs again once a guest has been direct-booted
+                -- crash or not. Rollback works at the right layer instead:
+                the bootloader itself tracks each slot's confirmed/pending
+                state and falls back to this launcher (the factory partition)
+                before any application code runs, crash-fast or not.
+
+                This requires guest cooperation: every guest app must call
+                esp_ota_mark_app_valid_cancel_rollback() (standard ESP-IDF
+                app_update API) early in its own startup, once it knows it's
+                healthy -- see README.md "Design decisions" for exactly why,
+                and for a caveat about re-downloading the currently-running
+                slot that boot_into.c compensates for. A guest that never
+                calls it just always rolls back on any reset, which is a
+                safe default, not a silent trap -- but it does mean a
+                well-behaved guest that skips this call never benefits from
+                staying "confirmed valid" between boots.
 
     endmenu
 
-    menu "Reseau (optionnel)"
+    menu "Network (optional)"
 
         config LAUNCHER_NET_OTA_ENABLE
-            bool "Activer l'OTA reseau (telechargement HTTP d'un programme)"
+            bool "Enable network OTA (HTTP download of a program)"
             default n
             select LAUNCHER_NET_WIFI_ENABLE
             help
-                Ajoute une entree menu pour telecharger un binaire .bin depuis
-                CONFIG_LAUNCHER_NET_OTA_URL_BASE et l'ecrire dans un slot ota_*.
+                Adds a menu entry to download a .bin binary from
+                CONFIG_LAUNCHER_NET_OTA_URL_BASE and write it into an ota_* slot.
 
         config LAUNCHER_NET_OTA_URL_BASE
-            string "URL de base du serveur/manifeste OTA"
+            string "Base URL of the OTA server/manifest"
             default ""
             depends on LAUNCHER_NET_OTA_ENABLE || LAUNCHER_NET_VERSION_CHECK_ENABLE
             help
-                Le launcher va chercher le manifeste a "<URL_BASE>/manifest.json"
-                (GET, JSON -- voir README.md pour le format attendu). Les URLs de
-                telechargement de chaque binaire, elles, sont prises telles
-                quelles dans le manifeste (peuvent pointer ailleurs, ex. GitHub
-                Releases).
+                The launcher will fetch the manifest at "<URL_BASE>/manifest.json"
+                (GET, JSON -- see README.md for the expected format). Each
+                binary's download URL, though, is taken as-is from the manifest
+                (may point elsewhere, e.g. GitHub Releases).
 
         config LAUNCHER_NET_REMOTE_CONTROL_ENABLE
-            bool "Activer le controle a distance du menu"
+            bool "Enable remote control of the menu"
             default n
             help
-                Permet de declencher boot_into() depuis un transport reseau
-                (serveur HTTP embarque ou BLE) en plus de la HAL de navigation locale.
+                Allows triggering boot_into() from a network transport (embedded
+                HTTP server or BLE) in addition to the local navigation HAL.
 
         choice LAUNCHER_NET_REMOTE_TRANSPORT
-            prompt "Transport pour le controle a distance"
+            prompt "Transport for remote control"
             depends on LAUNCHER_NET_REMOTE_CONTROL_ENABLE
             default LAUNCHER_NET_REMOTE_TRANSPORT_HTTP
 
             config LAUNCHER_NET_REMOTE_TRANSPORT_HTTP
-                bool "Serveur HTTP (esp_http_server)"
+                bool "HTTP server (esp_http_server)"
                 select LAUNCHER_NET_WIFI_ENABLE
 
             config LAUNCHER_NET_REMOTE_TRANSPORT_BLE
-                bool "BLE (service GATT custom)"
+                bool "BLE (custom GATT service)"
                 depends on SOC_BLE_SUPPORTED
                 select BT_ENABLED
                 help
@@ -245,62 +239,61 @@ menu "Bootloader Launcher Configuration"
         endchoice
 
         config LAUNCHER_NET_REMOTE_PIN
-            string "PIN/token pour le controle a distance (optionnel)"
+            string "PIN/token for remote control (optional)"
             default ""
             depends on LAUNCHER_NET_REMOTE_CONTROL_ENABLE
             help
-                Dissuade un usage accidentel/opportuniste sur le reseau local. Ne pas
-                considerer ceci comme une securite robuste -- usage reseau de
-                confiance uniquement (reseau domestique, pas d'exposition Internet).
+                Deters accidental/opportunistic use on the local network. Do not
+                consider this robust security -- trusted-network use only (home
+                network, no Internet exposure).
 
         config LAUNCHER_NET_VERSION_CHECK_ENABLE
-            bool "Activer la verification de version distante"
+            bool "Enable remote version checking"
             default n
             select LAUNCHER_NET_WIFI_ENABLE
             help
-                Compare la version de chaque slot (esp_app_desc_t) avec un
-                manifeste distant et affiche un indicateur dans le menu.
-                N'entraine aucun telechargement automatique.
+                Compares each slot's version (esp_app_desc_t) against a remote
+                manifest and shows an indicator in the menu. Does not trigger any
+                automatic download.
 
         config LAUNCHER_NET_WIFI_ENABLE
-            bool "Activer le sous-systeme WiFi"
+            bool "Enable the WiFi subsystem"
             default n
             help
-                Force a y automatiquement des que OTA, verification de version,
-                ou le controle a distance en transport HTTP est actif (voir
-                "select" sur chacun -- le transport BLE n'a lui pas besoin de WiFi).
-                Credentials geres via NVS (jamais hardcodes/commits), avec un
-                fallback de dev optionnel ci-dessous -- voir README.
+                Automatically forced to y as soon as OTA, version checking, or
+                remote control over the HTTP transport is active (see "select" on
+                each -- the BLE transport doesn't need WiFi). Credentials handled
+                via NVS (never hardcoded/committed), with an optional dev
+                fallback below -- see README.
 
         config LAUNCHER_NET_WIFI_SSID
-            string "WiFi SSID (fallback dev uniquement, prefer NVS at runtime)"
+            string "WiFi SSID (dev fallback only, prefer NVS at runtime)"
             default ""
             depends on LAUNCHER_NET_WIFI_ENABLE
             help
-                Utilise uniquement si aucun credential n'est deja present en NVS.
-                Mettre cette valeur dans un sdkconfig.local non commite (voir
-                .gitignore / README) plutot que de committer un SSID/password
-                reel dans sdkconfig.defaults.
+                Only used if no credential is already present in NVS. Put this
+                value in an uncommitted sdkconfig.local (see .gitignore / README)
+                rather than committing a real SSID/password to
+                sdkconfig.defaults.
 
         config LAUNCHER_NET_WIFI_PASSWORD
-            string "WiFi password (fallback dev uniquement)"
+            string "WiFi password (dev fallback only)"
             default ""
             depends on LAUNCHER_NET_WIFI_ENABLE
 
         config LAUNCHER_NET_TASK_STACK_SIZE
-            int "Taille de pile pour les operations reseau (bytes)"
+            int "Stack size for network operations (bytes)"
             default 8192
             depends on LAUNCHER_NET_WIFI_ENABLE || LAUNCHER_NET_REMOTE_TRANSPORT_BLE
             help
-                WiFi/BLE init + TLS/HTTP/cJSON (mbedtls, esp_http_client,
-                cJSON) consomment significativement plus de pile que le
-                reste du launcher. Un stack overflow a ete observe sur
-                CONFIG_ESP_MAIN_TASK_STACK_SIZE par defaut (3584) lorsque
-                ces operations tournaient inline sur la tache "main" (voir
-                issue #14) -- elles tournent maintenant sur une tache
-                dediee avec cette taille de pile a la place. Augmenter si
-                un stack overflow reapparait malgre tout (ex. avec BLE +
-                OTA + version-check combines).
+                WiFi/BLE init + TLS/HTTP/cJSON (mbedtls, esp_http_client, cJSON)
+                consume significantly more stack than the rest of the launcher.
+                A stack overflow was observed on the default
+                CONFIG_ESP_MAIN_TASK_STACK_SIZE (3584) when these operations ran
+                inline on the "main" task (see issue #14) -- they now run on a
+                dedicated task with this stack size instead. Increase if a stack
+                overflow reappears regardless (e.g. with BLE + OTA +
+                version-check combined).
 
     endmenu
 

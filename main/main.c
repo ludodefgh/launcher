@@ -1,5 +1,4 @@
 #include <stdbool.h>
-#include <stdint.h>
 #include <string.h>
 #include <stdio.h>
 #include <inttypes.h>
@@ -7,7 +6,6 @@
 #include "freertos/FreeRTOS.h"
 #include "freertos/task.h"
 #include "esp_log.h"
-#include "esp_system.h"
 #include "sdkconfig.h"
 
 #include "nvs_state.h"
@@ -44,23 +42,6 @@ static const char *TAG = "launcher";
 
 static bool s_display_ready;
 
-/* Crash-loop failsafe (issue #23): PANIC/watchdog resets are what an app
- * crashing at startup actually looks like. Brownout is deliberately
- * excluded -- it can come from external power flakiness (weak USB
- * cable/supply) unrelated to a bug in the app, and shouldn't count against
- * it. */
-static bool last_boot_was_abnormal(void) {
-    switch (esp_reset_reason()) {
-        case ESP_RST_PANIC:
-        case ESP_RST_INT_WDT:
-        case ESP_RST_TASK_WDT:
-        case ESP_RST_WDT:
-            return true;
-        default:
-            return false;
-    }
-}
-
 static void check_client_protocol_version(void) {
     uint32_t version = 0;
     if (nvs_state_get_protocol_version(&version) != ESP_OK || version == 0) {
@@ -89,14 +70,14 @@ static void show_error_and_wait(const char *line1, const char *line2) {
         return; /* nothing more we can do without a screen */
     }
     display_fill_screen(DISPLAY_COLOR_BLACK);
-    display_draw_text(8, 90, "ERREUR", DISPLAY_COLOR_WHITE, DISPLAY_COLOR_BLACK, 2);
+    display_draw_text(8, 90, "ERROR", DISPLAY_COLOR_WHITE, DISPLAY_COLOR_BLACK, 2);
     if (line1) {
         display_draw_text(8, 120, line1, DISPLAY_COLOR_WHITE, DISPLAY_COLOR_BLACK, 1);
     }
     if (line2) {
         display_draw_text(8, 132, line2, DISPLAY_COLOR_WHITE, DISPLAY_COLOR_BLACK, 1);
     }
-    display_draw_text(8, 150, "RETOUR AU MENU...", DISPLAY_COLOR_WHITE, DISPLAY_COLOR_BLACK, 1);
+    display_draw_text(8, 150, "RETURNING TO MENU...", DISPLAY_COLOR_WHITE, DISPLAY_COLOR_BLACK, 1);
     vTaskDelay(pdMS_TO_TICKS(1500));
 }
 
@@ -188,33 +169,7 @@ void app_main(void) {
     decision_input.button_held = drv->is_button_held();
     check_client_protocol_version();
 
-    /* Crash-loop failsafe (issue #23): fold in whether the previous boot
-     * attempt ended in a fast abnormal reset before deciding. */
-    uint32_t crash_streak = 0;
-    ESP_ERROR_CHECK(nvs_state_get_crash_streak(&crash_streak));
-    int64_t elapsed_us = INT64_MAX;
-    bool boot_attempt_found = false;
-    ESP_ERROR_CHECK(nvs_state_get_boot_attempt_elapsed_us(&elapsed_us, &boot_attempt_found));
-    if (!boot_attempt_found) {
-        elapsed_us = INT64_MAX; /* first boot ever -- can't have been a fast crash */
-    }
-    crash_streak = boot_logic_next_crash_streak(crash_streak, last_boot_was_abnormal(), elapsed_us,
-                                                 (int64_t)CONFIG_LAUNCHER_CRASH_LOOP_WINDOW_MS * 1000);
-    ESP_ERROR_CHECK(nvs_state_set_crash_streak(crash_streak));
-    decision_input.crash_streak = crash_streak;
-    decision_input.crash_loop_threshold = CONFIG_LAUNCHER_CRASH_LOOP_THRESHOLD;
-
-    bool would_trip_crash_loop = decision_input.has_last_app && !decision_input.force_menu &&
-                                  !decision_input.button_held && decision_input.crash_loop_threshold > 0 &&
-                                  decision_input.crash_streak >= decision_input.crash_loop_threshold;
-
     boot_action_t action = boot_logic_decide(&decision_input);
-    if (would_trip_crash_loop) {
-        ESP_LOGW(TAG,
-                 "crash-loop failsafe: '%s' had %" PRIu32 " fast abnormal reset(s) in a row (threshold %" PRIu32
-                 "), forcing menu instead of direct boot",
-                 decision_input.last_app_partition, decision_input.crash_streak, decision_input.crash_loop_threshold);
-    }
 
     if (action == BOOT_ACTION_BOOT_DIRECT) {
         ESP_LOGI(TAG, "direct boot into '%s'", decision_input.last_app_partition);
@@ -228,7 +183,7 @@ void app_main(void) {
         esp_err_t err = boot_into(decision_input.last_app_partition);
         /* Only reached if boot_into() failed -- esp_restart() never returns on success. */
         ESP_LOGW(TAG, "direct boot failed (%s), falling back to menu", esp_err_to_name(err));
-        show_error_and_wait("Programme introuvable ou", "partition non flashee.");
+        show_error_and_wait("Program not found or", "partition not flashed.");
         action = BOOT_ACTION_SHOW_MENU;
     }
 
@@ -237,7 +192,7 @@ void app_main(void) {
 
 #if CONFIG_LAUNCHER_NET_VERSION_CHECK_ENABLE
         display_fill_screen(DISPLAY_COLOR_BLACK);
-        display_draw_text(8, 100, "VERIF. MISES A JOUR...", DISPLAY_COLOR_WHITE, DISPLAY_COLOR_BLACK, 1);
+        display_draw_text(8, 100, "CHECKING FOR UPDATES...", DISPLAY_COLOR_WHITE, DISPLAY_COLOR_BLACK, 1);
         run_on_network_task(run_version_check, NULL); /* no-op / silently skipped if WiFi unavailable */
 #endif
 
@@ -261,13 +216,10 @@ void app_main(void) {
         const char *label = kApps[selected].partition_label;
 
         ESP_ERROR_CHECK(nvs_state_set_last_app(label));
-        /* Deliberate reselection is the only thing that clears the
-         * crash-loop streak (issue #23) -- not merely showing the menu. */
-        ESP_ERROR_CHECK(nvs_state_set_crash_streak(0));
 
         esp_err_t err = boot_into(label);
         /* Only reached on failure -- stay in the menu instead of crash-looping. */
         ESP_LOGW(TAG, "boot into '%s' failed (%s)", label, esp_err_to_name(err));
-        show_error_and_wait(kApps[selected].display_name, "semble vide/non flashe.");
+        show_error_and_wait(kApps[selected].display_name, "appears empty/not flashed.");
     }
 }
