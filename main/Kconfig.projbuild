@@ -123,12 +123,16 @@ menu "Bootloader Launcher Configuration"
 
         config LAUNCHER_DISPLAY_MIRROR_X
             bool "Miroir horizontal"
-            default n
+            default y
             help
-                A ajuster au cas par cas selon le montage physique du panel --
-                impossible a determiner sans le hardware en main. Si l'image
-                est correctement orientee apres LAUNCHER_DISPLAY_SWAP_XY mais
-                inversee horizontalement, activer cette option.
+                A ajuster au cas par cas selon le montage physique du panel.
+                default y confirme sur le hardware de reference de ce projet
+                (module ST7789 2.4", voir issue #13) -- avec
+                LAUNCHER_DISPLAY_SWAP_XY=y seul, l'image sortait inversee
+                horizontalement (texte lisible mais gauche/droite inverse);
+                SWAP_XY=y + MIRROR_X=y + MIRROR_Y=n donne l'orientation
+                paysage correcte sans miroir sur ce panel. Si l'image sort
+                inversee sur un autre module, desactiver cette option.
 
         config LAUNCHER_DISPLAY_MIRROR_Y
             bool "Miroir vertical"

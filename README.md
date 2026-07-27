@@ -201,11 +201,13 @@ reusing/extending this repo:
   `_MIRROR_Y`) is a Kconfig option, not hardcoded.** Found on real hardware
   (issue #13): a 2.4" ST7789 module is natively portrait, so
   `esp_lcd_panel_swap_xy()` is needed to get the landscape image this
-  driver assumes (`swap_xy` defaults to `y`); whether mirroring is also
-  needed depends on the specific panel's physical mounting and can't be
-  determined without hardware in hand, so those default to `n` and are
-  meant to be adjusted via `menuconfig` — same reasoning as
-  `CONFIG_LAUNCHER_EC11_INVERT` for the encoder.
+  driver assumes, and mirroring depends on the specific panel's scan
+  direction/mounting — not guessable without hardware in hand, same
+  reasoning as `CONFIG_LAUNCHER_EC11_INVERT` for the encoder. Confirmed on
+  this project's reference hardware: `SWAP_XY=y, MIRROR_X=y, MIRROR_Y=n`
+  (the defaults) gives a correct, unmirrored landscape image; a different
+  panel may need a different combination, adjustable via `menuconfig`
+  without touching code.
 
 ## Network features (optional, off by default)
 
