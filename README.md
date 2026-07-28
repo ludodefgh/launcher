@@ -336,13 +336,9 @@ reusing/extending this repo:
     `factory` instead — forces the menu without touching NVS at all. Still
     a small, pure, chip-agnostic addition, unit-tested the same way as the
     rest of `boot_logic.c` (see `test/test_boot_logic.c`).
-  - **Not yet confirmed on real hardware across all three chip targets** —
-    everything above is verified against the actual ESP-IDF v5.5 source and
-    passes host-based unit tests plus clean docker builds for
-    esp32/esp32s3/esp32c3, but given this exact issue's history of two
-    prior "fixes" that looked correct and failed on real hardware, treat
-    this as unconfirmed until it's been through an actual crash-loop on a
-    device.
+  - **Confirmed working on real hardware** — holding the button through an
+    actual crash-loop correctly recovers to the menu, unlike attempts 1 and
+    2. Issue #23 is closed.
 - **App-slot menu labels never read a name out of the flashed image itself
   (issue #22).** A first attempt used `esp_app_desc_t.project_name` via
   `esp_ota_get_partition_description()`, but real-hardware testing showed
