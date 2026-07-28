@@ -37,6 +37,15 @@ void net_version_check_run(void) {
         if (entry->slot[0] == '\0') {
             continue;
         }
+        if (entry->github_repo[0] != '\0') {
+            /* No static "latest version" to compare against -- github_repo
+             * entries resolve their version dynamically per-release at
+             * download time (net_github.c), not from this manifest, so
+             * entry->version is always empty here (issue #29). Comparing
+             * against it would flag "update available" on every single
+             * boot regardless of whether the installed build is current. */
+            continue;
+        }
 
         const esp_partition_t *part =
             esp_partition_find_first(ESP_PARTITION_TYPE_APP, ESP_PARTITION_SUBTYPE_ANY, entry->slot);
