@@ -497,10 +497,13 @@ Either transport calls the exact same `boot_into()` used by the local menu
   pairing/bonding (PIN is checked at the application layer instead, same as
   HTTP, to keep both transports symmetric and avoid NimBLE's much larger
   security-manager surface for what's meant to be a trusted-home-network
-  feature). One service, two characteristics: a READ one returning a
-  comma-separated list of partition labels, and a WRITE one accepting
-  `<slot_label>` or `<slot_label>:<pin>` as plain ASCII to trigger the boot.
-  Independent of WiFi.
+  feature). One service, two characteristics: a READ one returning the slot
+  list as one record per line, tab-separated
+  `label\tname\tversion\tflashed` (`name` from `app_registry_resolve_label`,
+  `flashed` = `1`/`0`), so a BLE client shows the same rows as the TFT menu
+  and the HTTP remote instead of raw labels; and a WRITE one accepting
+  `<slot_label>` or `<slot_label>:<pin>` as plain ASCII to trigger the boot
+  (still keyed by the raw partition label). Independent of WiFi.
 
   **Manual menuconfig step required**: Kconfig's `select` cannot force a
   specific member of a `choice` block (a real Kconfig limitation — see
