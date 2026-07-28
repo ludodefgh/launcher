@@ -51,7 +51,7 @@ if(CONFIG_LAUNCHER_NET_OTA_ENABLE OR CONFIG_LAUNCHER_NET_VERSION_CHECK_ENABLE)
 endif()
 
 if(CONFIG_LAUNCHER_NET_OTA_ENABLE)
-    list(APPEND launcher_srcs "net_ota.c")
+    list(APPEND launcher_srcs "net_ota.c" "net_github.c")
 endif()
 
 if(CONFIG_LAUNCHER_NET_VERSION_CHECK_ENABLE)

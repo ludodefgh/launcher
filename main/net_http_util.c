@@ -1,6 +1,10 @@
 #include "net_http_util.h"
 
 #include <stdbool.h>
+#include <stdlib.h>
+#include <string.h>
+
+#include "esp_crt_bundle.h"
 
 #define MAX_REDIRECTS 5
 
@@ -31,5 +35,64 @@ esp_err_t net_http_open_and_follow_redirects(esp_http_client_handle_t client, in
     }
 
     *out_status = status;
+    return ESP_OK;
+}
+
+esp_err_t net_http_fetch_to_buffer(const char *url, size_t max_bytes, char **out_buf, int *out_len) {
+    bool is_https = strncmp(url, "https://", 8) == 0;
+    esp_http_client_config_t config = {
+        .url = url,
+        .timeout_ms = 10000,
+        .crt_bundle_attach = is_https ? esp_crt_bundle_attach : NULL,
+        /* See net_http_open_and_follow_redirects()'s doc comment -- GitHub
+         * Releases redirect targets need more than the default 512 bytes. */
+        .buffer_size = 2048,
+        .buffer_size_tx = 2048,
+    };
+    esp_http_client_handle_t client = esp_http_client_init(&config);
+    if (client == NULL) {
+        return ESP_ERR_NO_MEM;
+    }
+
+    int status = 0;
+    esp_err_t err = net_http_open_and_follow_redirects(client, &status);
+    if (err != ESP_OK) {
+        esp_http_client_cleanup(client);
+        return err;
+    }
+    if (status != 200) {
+        esp_http_client_close(client);
+        esp_http_client_cleanup(client);
+        return ESP_FAIL;
+    }
+
+    char *buf = malloc(max_bytes + 1);
+    if (buf == NULL) {
+        esp_http_client_close(client);
+        esp_http_client_cleanup(client);
+        return ESP_ERR_NO_MEM;
+    }
+
+    size_t total = 0;
+    while (total < max_bytes) {
+        int n = esp_http_client_read(client, buf + total, max_bytes - total);
+        if (n < 0) {
+            free(buf);
+            esp_http_client_close(client);
+            esp_http_client_cleanup(client);
+            return ESP_FAIL;
+        }
+        if (n == 0) {
+            break;
+        }
+        total += (size_t)n;
+    }
+    buf[total] = '\0';
+
+    esp_http_client_close(client);
+    esp_http_client_cleanup(client);
+
+    *out_buf = buf;
+    *out_len = (int)total;
     return ESP_OK;
 }

@@ -1,5 +1,6 @@
 #include "net_ota.h"
 #include "net_manifest.h"
+#include "net_github.h"
 #include "net_wifi.h"
 #include "display.h"
 #include "app_registry.h"
@@ -268,6 +269,64 @@ void net_ota_run_download_flow(const nav_input_driver_t *drv) {
         return; /* cancelled */
     }
 
+    /* Resolved separately from `entry` below rather than mutating
+     * manifest.entries[app_idx] in place -- entry may end up pointing at
+     * either the original manifest entry (plain url/version) or this local,
+     * depending on whether github_repo was set (issue #29). */
+    net_manifest_entry_t resolved_entry;
+    const net_manifest_entry_t *entry = &manifest.entries[app_idx];
+
+    if (entry->github_repo[0] != '\0') {
+        show_message("LOADING RELEASES...", NULL);
+        static net_github_release_list_t releases;
+        if (net_github_fetch_releases(entry->github_repo, &releases) != ESP_OK || releases.count == 0) {
+            show_message("RELEASES FAILED", "check github_repo in manifest");
+            vTaskDelay(pdMS_TO_TICKS(2000));
+            return;
+        }
+
+        const char *release_labels[NET_GITHUB_MAX_RELEASES];
+        for (size_t i = 0; i < releases.count; i++) {
+            release_labels[i] = releases.releases[i].tag_name;
+        }
+        int version_idx = run_picker(drv, "CHOOSE VERSION", release_labels, (int)releases.count);
+        if (version_idx < 0) {
+            return; /* cancelled */
+        }
+        const net_github_release_t *release = &releases.releases[version_idx];
+
+        const net_github_asset_t *chosen_asset = NULL;
+        esp_err_t resolve_err = net_github_resolve_target_asset(release, &chosen_asset);
+        if (resolve_err != ESP_OK) {
+            /* No launcher.manifest.json on this release (or it doesn't cover
+             * this chip target) -- fall back to a manual asset pick, same
+             * as any repo that hasn't adopted the manifest yet (see
+             * docs/launcher-manifest.md). */
+            if (release->asset_count == 0) {
+                show_message("NO ASSETS", "this release has none");
+                vTaskDelay(pdMS_TO_TICKS(2000));
+                return;
+            }
+            const char *asset_labels[NET_GITHUB_MAX_ASSETS_PER_RELEASE];
+            for (size_t i = 0; i < release->asset_count; i++) {
+                asset_labels[i] = release->assets[i].name;
+            }
+            int asset_idx = run_picker(drv, "CHOOSE ASSET", asset_labels, (int)release->asset_count);
+            if (asset_idx < 0) {
+                return; /* cancelled */
+            }
+            chosen_asset = &release->assets[asset_idx];
+        }
+
+        memset(&resolved_entry, 0, sizeof(resolved_entry));
+        snprintf(resolved_entry.name, sizeof(resolved_entry.name), "%s", entry->name);
+        snprintf(resolved_entry.slot, sizeof(resolved_entry.slot), "%s", entry->slot);
+        snprintf(resolved_entry.version, sizeof(resolved_entry.version), "%s", release->tag_name);
+        snprintf(resolved_entry.url, sizeof(resolved_entry.url), "%s", chosen_asset->download_url);
+        resolved_entry.size = chosen_asset->size;
+        entry = &resolved_entry;
+    }
+
     /* Overwriting a slot that already has something flashed is more
      * consequential than just looking at the main menu, so this picker
      * spells out "(used)" vs "(empty)" explicitly -- see issue #22
@@ -297,7 +356,6 @@ void net_ota_run_download_flow(const nav_input_driver_t *drv) {
         return; /* cancelled */
     }
 
-    const net_manifest_entry_t *entry = &manifest.entries[app_idx];
     const char *dest_label = app_registry_partition_label((size_t)slot_idx);
     char dest_name_buf[NVS_STATE_SLOT_NAME_LEN];
     const char *dest_name = app_registry_resolve_label((size_t)slot_idx, dest_name_buf, sizeof(dest_name_buf));

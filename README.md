@@ -468,6 +468,19 @@ was actually downloaded, never trusted for erase sizing —
 `OTA_SIZE_UNKNOWN` is used instead, which erases the whole target
 partition regardless).
 
+**`github_repo` instead of `url`/`version`** (issue #29): an entry can set
+`"github_repo": "owner/repo"` instead of a fixed `url`/`version`. The
+download flow then lists that repo's actual GitHub releases
+(`main/net_github.c`, newest first) and lets the user pick one — including
+older releases, e.g. to intentionally roll back — instead of the manifest
+author having to hand-list every version as a separate entry. If the
+chosen release has a `launcher.manifest.json` asset, the right binary for
+this device's chip target is picked automatically; otherwise the user
+picks manually from that release's raw asset list. See
+[`docs/launcher-manifest.md`](docs/launcher-manifest.md) for the exact
+per-release manifest format — written to be handed as-is to an AI
+assistant working in a *different* repo to generate a compliant one.
+
 ### Remote control (`CONFIG_LAUNCHER_NET_REMOTE_CONTROL_ENABLE`)
 
 Either transport calls the exact same `boot_into()` used by the local menu

@@ -1,5 +1,7 @@
 #pragma once
 
+#include <stddef.h>
+
 #include "esp_http_client.h"
 #include "esp_err.h"
 
@@ -26,6 +28,17 @@ extern "C" {
  * same as a failed esp_http_client_open() today.
  */
 esp_err_t net_http_open_and_follow_redirects(esp_http_client_handle_t client, int *out_status);
+
+/*
+ * GETs `url` (following redirects per net_http_open_and_follow_redirects()
+ * above) into a malloc'd, NUL-terminated buffer capped at max_bytes.
+ * Attaches the ESP-IDF cert bundle for https:// URLs. On ESP_OK, *out_buf is
+ * malloc'd (caller must free()) and *out_len is the number of bytes read
+ * (excluding the added NUL). Shared by net_manifest.c and net_github.c --
+ * both fetch a small JSON document and want the exact same
+ * redirect-following/TLS/buffering behavior.
+ */
+esp_err_t net_http_fetch_to_buffer(const char *url, size_t max_bytes, char **out_buf, int *out_len);
 
 #ifdef __cplusplus
 }
