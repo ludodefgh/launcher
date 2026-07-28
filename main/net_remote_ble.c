@@ -1,6 +1,7 @@
 #include "net_remote_ble.h"
 #include "app_registry.h"
 #include "boot_into.h"
+#include "nvs_state.h"
 
 #include <string.h>
 #include <stdio.h>
@@ -33,7 +34,7 @@ static const ble_uuid128_t s_select_chr_uuid =
 
 static uint16_t s_slots_val_handle;
 static uint16_t s_select_val_handle;
-static char s_slots_text[256];
+static char s_slots_text[512];
 static uint8_t s_own_addr_type;
 static bool s_started;
 
@@ -145,10 +146,29 @@ static const struct ble_gatt_svc_def s_gatt_svcs[] = {
 };
 
 static void build_slots_text(void) {
+    /* One record per slot, "label\tname\tversion\tflashed\n":
+     *   - label:   app_registry_partition_label(i) -- the boot key the select
+     *              characteristic still expects (unchanged), so booting is by label.
+     *   - name:    app_registry_resolve_label(i) -- the friendly display name.
+     *   - version: app_registry_get_version(i), empty if the slot isn't flashed.
+     *   - flashed: '1' if app_registry_slot_is_flashed(i), else '0'.
+     * Mirrors what the TFT menu (ui_menu.c) and the HTTP remote (net_remote_http.c)
+     * already surface, so a BLE client shows the same rows -- see issue #30. Built
+     * once at start; the app's "Refresh" re-reads this same cached string. */
     int len = 0;
-    for (size_t i = 0; i < app_registry_count() && len < (int)sizeof(s_slots_text) - 32; i++) {
-        len += snprintf(s_slots_text + len, sizeof(s_slots_text) - len, "%s%s", i == 0 ? "" : ",",
-                         app_registry_partition_label(i));
+    s_slots_text[0] = '\0';
+    /* Reserve one full record's worth of headroom so a slot is never half-written. */
+    const int reserve = (int)(NVS_STATE_SLOT_NAME_LEN + APP_REGISTRY_VERSION_LEN + 32);
+    for (size_t i = 0; i < app_registry_count() && len < (int)sizeof(s_slots_text) - reserve; i++) {
+        char name_buf[NVS_STATE_SLOT_NAME_LEN];
+        const char *name = app_registry_resolve_label(i, name_buf, sizeof(name_buf));
+        char version[APP_REGISTRY_VERSION_LEN];
+        if (!app_registry_get_version(i, version, sizeof(version))) {
+            version[0] = '\0';
+        }
+        len += snprintf(s_slots_text + len, sizeof(s_slots_text) - len, "%s\t%s\t%s\t%d\n",
+                        app_registry_partition_label(i), name, version,
+                        app_registry_slot_is_flashed(i) ? 1 : 0);
     }
 }
 
