@@ -3,6 +3,7 @@
 #include "display.h"
 #include "nvs_state.h"
 #include "sdkconfig.h"
+#include "esp_app_desc.h"
 
 #if CONFIG_LAUNCHER_NET_VERSION_CHECK_ENABLE
 #include "net_version_check.h"
@@ -48,8 +49,8 @@ static int total_row_count(void) {
  * the main cause of a multi-second, visibly "typewriter" redraw. */
 static void draw_row(int i, bool is_selected) {
     int y = LIST_START_Y + i * ROW_HEIGHT;
-    display_color_t bg = is_selected ? DISPLAY_COLOR_WHITE : DISPLAY_COLOR_BLACK;
-    display_color_t fg = is_selected ? DISPLAY_COLOR_BLACK : DISPLAY_COLOR_WHITE;
+    display_color_t bg = is_selected ? DISPLAY_COLOR_BLACK : DISPLAY_COLOR_WHITE;
+    display_color_t fg = is_selected ? DISPLAY_COLOR_WHITE : DISPLAY_COLOR_BLACK;
 
     display_fill_rect(0, y - 2, display_width(), ROW_HEIGHT, bg);
 
@@ -91,19 +92,19 @@ static void draw_row(int i, bool is_selected) {
  * instead of tearing them down and recreating them for a fixed 2-item
  * menu. */
 static void draw_action_menu(int slot_i, int action) {
-    display_fill_screen(DISPLAY_COLOR_BLACK);
+    display_fill_screen(DISPLAY_COLOR_WHITE);
     char name_buf[NVS_STATE_SLOT_NAME_LEN];
     const char *display_name = app_registry_resolve_label((size_t)slot_i, name_buf, sizeof(name_buf));
     char title[32];
     snprintf(title, sizeof(title), "%.20s", display_name);
-    display_draw_text(MARGIN_X, TITLE_Y, title, DISPLAY_COLOR_WHITE, DISPLAY_COLOR_BLACK, TITLE_SCALE);
+    display_draw_text(MARGIN_X, TITLE_Y, title, DISPLAY_COLOR_BLACK, DISPLAY_COLOR_WHITE, TITLE_SCALE);
 
     static const char *const labels[2] = {"Launch", "Delete"};
     for (int i = 0; i < 2; i++) {
         int y = LIST_START_Y + i * ROW_HEIGHT;
         bool is_selected = (i == action);
-        display_color_t bg = is_selected ? DISPLAY_COLOR_WHITE : DISPLAY_COLOR_BLACK;
-        display_color_t fg = is_selected ? DISPLAY_COLOR_BLACK : DISPLAY_COLOR_WHITE;
+        display_color_t bg = is_selected ? DISPLAY_COLOR_BLACK : DISPLAY_COLOR_WHITE;
+        display_color_t fg = is_selected ? DISPLAY_COLOR_WHITE : DISPLAY_COLOR_BLACK;
         display_fill_rect(0, y - 2, display_width(), ROW_HEIGHT, bg);
         char line[16];
         snprintf(line, sizeof(line), "%c %s", is_selected ? '>' : ' ', labels[i]);
@@ -114,14 +115,14 @@ static void draw_action_menu(int slot_i, int action) {
 /* Blocking yes/no confirm before an actually-destructive erase -- same
  * SELECT=yes/LONG_PRESS=no convention as net_ota.c's run_confirm(). */
 static bool confirm_delete(int slot_i) {
-    display_fill_screen(DISPLAY_COLOR_BLACK);
-    display_draw_text(MARGIN_X, 90, "DELETE THIS SLOT?", DISPLAY_COLOR_WHITE, DISPLAY_COLOR_BLACK, 2);
+    display_fill_screen(DISPLAY_COLOR_WHITE);
+    display_draw_text(MARGIN_X, 90, "DELETE THIS SLOT?", DISPLAY_COLOR_BLACK, DISPLAY_COLOR_WHITE, 2);
     char name_buf[NVS_STATE_SLOT_NAME_LEN];
     const char *display_name = app_registry_resolve_label((size_t)slot_i, name_buf, sizeof(name_buf));
     char line[40];
     snprintf(line, sizeof(line), "%.20s", display_name);
-    display_draw_text(MARGIN_X, 120, line, DISPLAY_COLOR_WHITE, DISPLAY_COLOR_BLACK, 1);
-    display_draw_text(MARGIN_X, 150, "SELECT=YES  LONG PRESS=CANCEL", DISPLAY_COLOR_WHITE, DISPLAY_COLOR_BLACK, 1);
+    display_draw_text(MARGIN_X, 120, line, DISPLAY_COLOR_BLACK, DISPLAY_COLOR_WHITE, 1);
+    display_draw_text(MARGIN_X, 150, "SELECT=YES  LONG PRESS=CANCEL", DISPLAY_COLOR_BLACK, DISPLAY_COLOR_WHITE, 1);
 
     while (1) {
         nav_event_t evt;
@@ -161,8 +162,8 @@ static bool run_slot_action_menu(int slot_i) {
                     return true;
                 }
                 if (confirm_delete(slot_i)) {
-                    display_fill_screen(DISPLAY_COLOR_BLACK);
-                    display_draw_text(MARGIN_X, 100, "ERASING...", DISPLAY_COLOR_WHITE, DISPLAY_COLOR_BLACK, 2);
+                    display_fill_screen(DISPLAY_COLOR_WHITE);
+                    display_draw_text(MARGIN_X, 100, "ERASING...", DISPLAY_COLOR_BLACK, DISPLAY_COLOR_WHITE, 2);
                     app_registry_erase_slot((size_t)slot_i);
                 }
                 return false;
@@ -181,17 +182,28 @@ static void draw_footer(void) {
     if (net_wifi_get_ip_string(ip, sizeof(ip))) {
         char footer[24];
         snprintf(footer, sizeof(footer), "IP: %s", ip);
-        display_draw_text(MARGIN_X, display_height() - 16, footer, DISPLAY_COLOR_WHITE, DISPLAY_COLOR_BLACK, 1);
+        display_draw_text(MARGIN_X, display_height() - 16, footer, DISPLAY_COLOR_BLACK, DISPLAY_COLOR_WHITE, 1);
     }
 #endif
+
+    /* Bottom-right: the launcher's own version (esp_app_desc_t.version,
+     * populated at build time from `git describe` -- see CMakeLists.txt).
+     * Distinct from app_registry's per-slot version display (main menu
+     * rows / OTA picker) -- this is the launcher itself, not a guest. */
+    const esp_app_desc_t *desc = esp_app_get_description();
+    char version_text[24];
+    snprintf(version_text, sizeof(version_text), "%.20s", desc->version);
+    int text_w = display_text_width(version_text, 1);
+    display_draw_text(display_width() - MARGIN_X - text_w, display_height() - 16, version_text, DISPLAY_COLOR_BLACK,
+                       DISPLAY_COLOR_WHITE, 1);
 }
 
 /* Full paint: only needed once, when the menu is (re-)entered -- the
  * screen may have unrelated content on it (an error message, the OTA
  * flow's screens, ...) so this can't be skipped, unlike per-detent updates. */
 static void draw_menu_full(int selected) {
-    display_fill_screen(DISPLAY_COLOR_BLACK);
-    display_draw_text(MARGIN_X, TITLE_Y, "SELECT PROGRAM", DISPLAY_COLOR_WHITE, DISPLAY_COLOR_BLACK, TITLE_SCALE);
+    display_fill_screen(DISPLAY_COLOR_WHITE);
+    display_draw_text(MARGIN_X, TITLE_Y, "SELECT PROGRAM", DISPLAY_COLOR_BLACK, DISPLAY_COLOR_WHITE, TITLE_SCALE);
 
     int rows = total_row_count();
     for (int i = 0; i < rows; i++) {

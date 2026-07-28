@@ -36,23 +36,23 @@ static void nav_cb(nav_event_t event) {
 }
 
 static void show_message(const char *line1, const char *line2) {
-    display_fill_screen(DISPLAY_COLOR_BLACK);
+    display_fill_screen(DISPLAY_COLOR_WHITE);
     if (line1) {
-        display_draw_text(MARGIN_X, 100, line1, DISPLAY_COLOR_WHITE, DISPLAY_COLOR_BLACK, 2);
+        display_draw_text(MARGIN_X, 100, line1, DISPLAY_COLOR_BLACK, DISPLAY_COLOR_WHITE, 2);
     }
     if (line2) {
-        display_draw_text(MARGIN_X, 124, line2, DISPLAY_COLOR_WHITE, DISPLAY_COLOR_BLACK, 1);
+        display_draw_text(MARGIN_X, 124, line2, DISPLAY_COLOR_BLACK, DISPLAY_COLOR_WHITE, 1);
     }
 }
 
 static void draw_picker(const char *title, const char **labels, int count, int selected) {
-    display_fill_screen(DISPLAY_COLOR_BLACK);
-    display_draw_text(MARGIN_X, TITLE_Y, title, DISPLAY_COLOR_WHITE, DISPLAY_COLOR_BLACK, TITLE_SCALE);
+    display_fill_screen(DISPLAY_COLOR_WHITE);
+    display_draw_text(MARGIN_X, TITLE_Y, title, DISPLAY_COLOR_BLACK, DISPLAY_COLOR_WHITE, TITLE_SCALE);
     for (int i = 0; i < count; i++) {
         int y = LIST_START_Y + i * ROW_HEIGHT;
         bool is_selected = (i == selected);
-        display_color_t bg = is_selected ? DISPLAY_COLOR_WHITE : DISPLAY_COLOR_BLACK;
-        display_color_t fg = is_selected ? DISPLAY_COLOR_BLACK : DISPLAY_COLOR_WHITE;
+        display_color_t bg = is_selected ? DISPLAY_COLOR_BLACK : DISPLAY_COLOR_WHITE;
+        display_color_t fg = is_selected ? DISPLAY_COLOR_WHITE : DISPLAY_COLOR_BLACK;
         display_fill_rect(0, y - 2, display_width(), ROW_HEIGHT, bg);
         char line[48]; /* matches ui_menu.c's draw_row() line buffer -- see issue #22 follow-up */
         snprintf(line, sizeof(line), "%c %s", is_selected ? '>' : ' ', labels[i]);
@@ -111,7 +111,7 @@ static int run_picker(const nav_input_driver_t *drv, const char *title, const ch
 /* Blocking yes/no confirm. NAV_EVENT_SELECT = yes, NAV_EVENT_LONG_PRESS = no. */
 static bool run_confirm(const nav_input_driver_t *drv, const char *line1, const char *line2) {
     show_message(line1, line2);
-    display_draw_text(MARGIN_X, 150, "SELECT=YES  LONG PRESS=CANCEL", DISPLAY_COLOR_WHITE, DISPLAY_COLOR_BLACK, 1);
+    display_draw_text(MARGIN_X, 150, "SELECT=YES  LONG PRESS=CANCEL", DISPLAY_COLOR_BLACK, DISPLAY_COLOR_WHITE, 1);
 
     s_evt_queue = xQueueCreate(4, sizeof(nav_event_t));
     drv->set_callback(nav_cb);
@@ -141,8 +141,8 @@ static bool run_confirm(const nav_input_driver_t *drv, const char *line1, const 
 static void draw_progress(size_t downloaded) {
     char line[32];
     snprintf(line, sizeof(line), "%u KB...", (unsigned)(downloaded / 1024));
-    display_fill_rect(MARGIN_X, 124, display_width() - 2 * MARGIN_X, 16, DISPLAY_COLOR_BLACK);
-    display_draw_text(MARGIN_X, 124, line, DISPLAY_COLOR_WHITE, DISPLAY_COLOR_BLACK, 1);
+    display_fill_rect(MARGIN_X, 124, display_width() - 2 * MARGIN_X, 16, DISPLAY_COLOR_WHITE);
+    display_draw_text(MARGIN_X, 124, line, DISPLAY_COLOR_BLACK, DISPLAY_COLOR_WHITE, 1);
 }
 
 static esp_err_t download_to_partition(const net_manifest_entry_t *entry, const esp_partition_t *dest) {

@@ -100,15 +100,15 @@ static void show_error_and_wait(const char *line1, const char *line2) {
     if (ensure_display() != ESP_OK) {
         return; /* nothing more we can do without a screen */
     }
-    display_fill_screen(DISPLAY_COLOR_BLACK);
-    display_draw_text(8, 90, "ERROR", DISPLAY_COLOR_WHITE, DISPLAY_COLOR_BLACK, 2);
+    display_fill_screen(DISPLAY_COLOR_WHITE);
+    display_draw_text(8, 90, "ERROR", DISPLAY_COLOR_BLACK, DISPLAY_COLOR_WHITE, 2);
     if (line1) {
-        display_draw_text(8, 120, line1, DISPLAY_COLOR_WHITE, DISPLAY_COLOR_BLACK, 1);
+        display_draw_text(8, 120, line1, DISPLAY_COLOR_BLACK, DISPLAY_COLOR_WHITE, 1);
     }
     if (line2) {
-        display_draw_text(8, 132, line2, DISPLAY_COLOR_WHITE, DISPLAY_COLOR_BLACK, 1);
+        display_draw_text(8, 132, line2, DISPLAY_COLOR_BLACK, DISPLAY_COLOR_WHITE, 1);
     }
-    display_draw_text(8, 150, "RETURNING TO MENU...", DISPLAY_COLOR_WHITE, DISPLAY_COLOR_BLACK, 1);
+    display_draw_text(8, 150, "RETURNING TO MENU...", DISPLAY_COLOR_BLACK, DISPLAY_COLOR_WHITE, 1);
     vTaskDelay(pdMS_TO_TICKS(1500));
 }
 
@@ -218,8 +218,8 @@ void app_main(void) {
         ESP_LOGI(TAG, "direct boot into '%s'", decision_input.last_app_partition);
 #if CONFIG_LAUNCHER_BOOT_SPLASH_MS > 0
         if (ensure_display() == ESP_OK) {
-            display_fill_screen(DISPLAY_COLOR_BLACK);
-            display_draw_text(8, 100, "LAUNCHER", DISPLAY_COLOR_WHITE, DISPLAY_COLOR_BLACK, 3);
+            display_fill_screen(DISPLAY_COLOR_WHITE);
+            display_draw_text(8, 100, "LAUNCHER", DISPLAY_COLOR_BLACK, DISPLAY_COLOR_WHITE, 3);
             vTaskDelay(pdMS_TO_TICKS(CONFIG_LAUNCHER_BOOT_SPLASH_MS));
         }
 #endif
@@ -237,8 +237,8 @@ void app_main(void) {
         ESP_ERROR_CHECK(ensure_display());
 
 #if CONFIG_LAUNCHER_NET_VERSION_CHECK_ENABLE
-        display_fill_screen(DISPLAY_COLOR_BLACK);
-        display_draw_text(8, 100, "CHECKING FOR UPDATES...", DISPLAY_COLOR_WHITE, DISPLAY_COLOR_BLACK, 1);
+        display_fill_screen(DISPLAY_COLOR_WHITE);
+        display_draw_text(8, 100, "CHECKING FOR UPDATES...", DISPLAY_COLOR_BLACK, DISPLAY_COLOR_WHITE, 1);
         run_on_network_task(run_version_check, NULL); /* no-op / silently skipped if WiFi unavailable */
 #endif
 
