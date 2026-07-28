@@ -6,6 +6,8 @@
 #include "freertos/FreeRTOS.h"
 #include "freertos/task.h"
 #include "esp_log.h"
+#include "esp_ota_ops.h"
+#include "esp_partition.h"
 #include "sdkconfig.h"
 
 #include "nvs_state.h"
@@ -41,6 +43,22 @@ static const char *TAG = "launcher";
 #define LAUNCHER_SUPPORTED_CLIENT_PROTOCOL_VERSION 1
 
 static bool s_display_ready;
+
+/* Fresh read of otadata (via the standard app_update API) against the
+ * remembered "last_app_partition" -- see boot_logic.h's doc comment on
+ * otadata_matches_last_app (issue #23, crash-loop recovery, attempt 3).
+ * Normally this only matters when app_main() runs at all with a last_app
+ * already set, which itself only happens on first boot / force_menu / a
+ * CONFIG_BOOTLOADER_FACTORY_RESET-triggered landing -- a normal direct-boot
+ * never reaches this code, the 2nd-stage bootloader loads the guest
+ * partition without ever running the launcher's app_main() again. */
+static bool otadata_matches_last_app(const char *last_app_partition) {
+    const esp_partition_t *ota_boot_target = esp_ota_get_boot_partition();
+    if (ota_boot_target == NULL) {
+        return false;
+    }
+    return strcmp(ota_boot_target->label, last_app_partition) == 0;
+}
 
 static void check_client_protocol_version(void) {
     uint32_t version = 0;
@@ -167,6 +185,8 @@ void app_main(void) {
     decision_input.has_last_app = found_last_app;
     ESP_ERROR_CHECK(nvs_state_consume_force_menu(&decision_input.force_menu));
     decision_input.button_held = drv->is_button_held();
+    decision_input.otadata_matches_last_app =
+        !found_last_app || otadata_matches_last_app(decision_input.last_app_partition);
     check_client_protocol_version();
 
     boot_action_t action = boot_logic_decide(&decision_input);

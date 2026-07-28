@@ -55,6 +55,12 @@ menu "Bootloader Launcher Configuration"
             int "EC11 GPIO - push button"
             depends on LAUNCHER_NAV_DRIVER_EC11
             default 6
+            help
+                If changed, also update CONFIG_BOOTLOADER_NUM_PIN_FACTORY_RESET
+                in sdkconfig.defaults to match -- the crash-loop-recovery long
+                press (issue #23) is checked at the bootloader level on that
+                separate, ESP-IDF-native Kconfig symbol, which has no automatic
+                link to this one. See README.md "Design decisions".
 
         config LAUNCHER_EC11_INVERT
             bool "Invert EC11 encoder rotation direction"
@@ -132,6 +138,8 @@ menu "Bootloader Launcher Configuration"
     endmenu
 
     menu "Boot behavior"
+
+        comment "Crash-loop recovery (issue #23) is configured via ESP-IDF's own Bootloader config > Factory reset, not here -- see sdkconfig.defaults and README.md"
 
         config LAUNCHER_BOOT_SPLASH_MS
             int "Splash duration on direct boot (ms, 0 = disabled)"

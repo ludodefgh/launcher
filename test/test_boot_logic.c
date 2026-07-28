@@ -27,7 +27,8 @@ static int g_checks = 0;
         }                                                                    \
     } while (0)
 
-static boot_decision_input_t make_input(bool has_last_app, const char *label, bool force_menu, bool button_held) {
+static boot_decision_input_t make_input(bool has_last_app, const char *label, bool force_menu, bool button_held,
+                                         bool otadata_matches_last_app) {
     boot_decision_input_t in = {0};
     in.has_last_app = has_last_app;
     if (label != NULL) {
@@ -39,32 +40,39 @@ static boot_decision_input_t make_input(bool has_last_app, const char *label, bo
     }
     in.force_menu = force_menu;
     in.button_held = button_held;
+    in.otadata_matches_last_app = otadata_matches_last_app;
     return in;
 }
 
 static void test_decide_boots_direct_when_nothing_forces_menu(void) {
-    boot_decision_input_t in = make_input(true, "app_slot1", false, false);
+    boot_decision_input_t in = make_input(true, "app_slot1", false, false, true);
     CHECK(boot_logic_decide(&in) == BOOT_ACTION_BOOT_DIRECT, "should boot direct: has last app, no force, no button");
 }
 
 static void test_decide_shows_menu_when_no_last_app(void) {
-    boot_decision_input_t in = make_input(false, NULL, false, false);
+    boot_decision_input_t in = make_input(false, NULL, false, false, false);
     CHECK(boot_logic_decide(&in) == BOOT_ACTION_SHOW_MENU, "should show menu: first boot, no last app");
 }
 
 static void test_decide_shows_menu_when_force_menu_set(void) {
-    boot_decision_input_t in = make_input(true, "app_slot1", true, false);
+    boot_decision_input_t in = make_input(true, "app_slot1", true, false, true);
     CHECK(boot_logic_decide(&in) == BOOT_ACTION_SHOW_MENU, "should show menu: force_menu set by guest app");
 }
 
 static void test_decide_shows_menu_when_button_held(void) {
-    boot_decision_input_t in = make_input(true, "app_slot1", false, true);
+    boot_decision_input_t in = make_input(true, "app_slot1", false, true, true);
     CHECK(boot_logic_decide(&in) == BOOT_ACTION_SHOW_MENU, "should show menu: button held at boot");
 }
 
 static void test_decide_shows_menu_when_all_conditions_true(void) {
-    boot_decision_input_t in = make_input(true, "app_slot1", true, true);
+    boot_decision_input_t in = make_input(true, "app_slot1", true, true, true);
     CHECK(boot_logic_decide(&in) == BOOT_ACTION_SHOW_MENU, "should show menu: all conditions true at once");
+}
+
+static void test_decide_shows_menu_when_otadata_does_not_match_last_app(void) {
+    boot_decision_input_t in = make_input(true, "app_slot1", false, false, false);
+    CHECK(boot_logic_decide(&in) == BOOT_ACTION_SHOW_MENU,
+          "should show menu: otadata disagrees with remembered last app (issue #23 recovery)");
 }
 
 static void test_valid_app_magic(void) {
@@ -79,6 +87,7 @@ int main(void) {
     test_decide_shows_menu_when_force_menu_set();
     test_decide_shows_menu_when_button_held();
     test_decide_shows_menu_when_all_conditions_true();
+    test_decide_shows_menu_when_otadata_does_not_match_last_app();
     test_valid_app_magic();
 
     printf("%d/%d checks passed\n", g_checks - g_failures, g_checks);

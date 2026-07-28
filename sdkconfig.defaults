@@ -6,3 +6,27 @@
 CONFIG_PARTITION_TABLE_CUSTOM=y
 CONFIG_PARTITION_TABLE_CUSTOM_FILENAME="partitions.csv"
 CONFIG_ESPTOOLPY_FLASHSIZE_8MB=y
+
+# Crash-loop recovery (issue #23, attempt 3, see boot_logic.h/README.md
+# "Design decisions"): ESP-IDF's own bootloader-level GPIO factory-reset
+# feature, checked in the 2nd-stage bootloader before otadata-based
+# partition selection is trusted -- unlike an app-level button check, this
+# runs even when the remembered app crashes too fast for app_main() to ever
+# get control back. NUM_PIN/PIN_LOW must stay in sync with
+# CONFIG_LAUNCHER_EC11_GPIO_SW (see its help text) if that's ever changed
+# for different hardware -- they're independent Kconfig namespaces with no
+# automatic link between them.
+CONFIG_BOOTLOADER_FACTORY_RESET=y
+CONFIG_BOOTLOADER_NUM_PIN_FACTORY_RESET=6
+CONFIG_BOOTLOADER_FACTORY_RESET_PIN_LOW=y
+# Erase otadata only -- NOT CONFIG_BOOTLOADER_DATA_FACTORY_RESET (which
+# defaults to "nvs" and would also wipe WiFi credentials and OTA-cached slot
+# names/versions on every recovery). Left blank on purpose: boot_logic.c's
+# otadata_matches_last_app check is what forces the menu instead, without
+# needing NVS touched at all.
+CONFIG_BOOTLOADER_OTA_DATA_ERASE=y
+CONFIG_BOOTLOADER_DATA_FACTORY_RESET=""
+# Must stay longer than CONFIG_LAUNCHER_LONG_PRESS_MS (default 3000ms) so
+# the existing app-level "hold to force menu" gesture and this heavier
+# bootloader-level gesture stay physically distinguishable by hold duration.
+CONFIG_BOOTLOADER_HOLD_TIME_GPIO=5

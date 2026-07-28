@@ -21,12 +21,17 @@ rotary encoder, but the core (boot logic, HAL, Kconfig) is chip-agnostic.
   confirmation, then erases that slot's partition entirely
   (`app_registry_erase_slot()`) and clears any OTA-recorded name/version
   for it, so the slot correctly shows as empty again.
-- **No automatic crash-loop recovery currently.** If the remembered app
-  crashes too fast for the user to react by holding the button, the
-  launcher will keep direct-booting straight back into it. Two different
-  approaches were tried and both reverted after real-hardware testing
-  disproved them — see issue #23 and "Design decisions" below for the full
-  history and why this remains an open problem.
+- **Crash-loop recovery**: holding the encoder button at boot for
+  `CONFIG_BOOTLOADER_HOLD_TIME_GPIO` seconds (default 5s) forces a return to
+  this menu, even if the remembered app crashes too fast to react to
+  normally. Unlike the app-level `button_held` check above, this is checked
+  by ESP-IDF's own bootloader (`CONFIG_BOOTLOADER_FACTORY_RESET`, see
+  `sdkconfig.defaults`) before otadata-based direct-boot is ever trusted, so
+  it doesn't depend on this launcher's own code getting a chance to run —
+  it works even against a guest that crashes within the first second. Two
+  earlier approaches were tried and reverted after real-hardware testing
+  disproved them before landing on this one — see issue #23 and "Design
+  decisions" below for the full history.
 - A guest app can hand control back to the menu by calling
   `launcher_request_menu_on_next_boot()` from `components/launcher_client`
   (e.g. on a long button press) and rebooting. This sets `force_menu` in NVS
@@ -221,9 +226,9 @@ reusing/extending this repo:
   (the defaults) gives a correct, unmirrored landscape image; a different
   panel may need a different combination, adjustable via `menuconfig`
   without touching code.
-- **Crash-loop recovery (issue #23) — two attempts, both shipped and then
-  fully reverted after real-hardware testing disproved each one's core
-  assumption. Currently unimplemented; see below for the open question.**
+- **Crash-loop recovery (issue #23) — three attempts. The first two were
+  shipped and fully reverted after real-hardware testing disproved each
+  one's core assumption; the third is what's currently in place.**
   - **Attempt 1 (reverted): an NVS crash-streak counter checked in
     `app_main()`.** Confirmed dead code on real hardware (debug logging
     across 6 boots and 5 triggered crashes showed `app_main()` only ran
@@ -276,18 +281,68 @@ reusing/extending this repo:
     longer need to call `esp_ota_mark_app_valid_cancel_rollback()` — that
     requirement is gone along with the rest of it. Issue #25 (which tracked
     adding that call to guest apps) was closed as no longer applicable.
-  - **Open design question, not yet implemented:** the issue #27 reporter
-    suggested a custom-bootloader approach instead — e.g. a GPIO check (the
-    same button already used for "hold to force menu") read directly in
-    bootloader code, before `esp_ota_set_boot_partition()` ever redirects
-    control away from `factory`, rather than trying to route recovery
-    through the app-level OTA rollback state machine at all. This is being
-    researched (how ESP-IDF's second-stage bootloader can safely be
-    customized, what's actually safe to do at that layer — no FreeRTOS, a
-    tiny stack, runs before any partition table validation most app code
-    relies on — and what the failure modes are if it's done wrong, since
-    nothing runs below the bootloader to recover from a mistake there) but
-    intentionally has no implementation yet.
+  - **Attempt 3 (current): ESP-IDF's built-in bootloader-level GPIO
+    factory-reset (`CONFIG_BOOTLOADER_FACTORY_RESET`), not a custom
+    bootloader.** The issue #27 reporter suggested a GPIO check read
+    directly in bootloader code, before `esp_ota_set_boot_partition()` ever
+    redirects control away from `factory` — the same layer attempt 2's
+    rollback ran at, but checked unconditionally on every boot rather than
+    routed through OTA rollback's img_state machinery. Research turned up
+    that ESP-IDF already ships exactly this as a first-party, Kconfig-only
+    feature (`components/bootloader/Kconfig.projbuild`) — no custom
+    bootloader code needed: `selected_boot_partition()` in
+    `bootloader_start.c` polls the configured GPIO
+    (`CONFIG_BOOTLOADER_NUM_PIN_FACTORY_RESET`, defaults to the same pin as
+    `CONFIG_LAUNCHER_EC11_GPIO_SW`) in a busy-wait loop for
+    `CONFIG_BOOTLOADER_HOLD_TIME_GPIO` seconds (default 5, kept longer than
+    `CONFIG_LAUNCHER_LONG_PRESS_MS`'s 3s so the two hold-gestures stay
+    distinguishable), on every boot except a deep-sleep wake — including a
+    reset caused by the guest's own crash. Because this runs before otadata
+    is trusted at all, it doesn't depend on `app_main()` getting control
+    back, unlike `button_held` above: even a guest that crashes in under a
+    second can't outrace it, since holding the button just needs to still be
+    held on the *next* automatic crash-reset for the bootloader to catch it.
+  - **This also resolves the tension flagged after attempt 2's revert**
+    between the official "factory is never rolled back" documentation and
+    the earlier bootloader-source trace that seemed to show a factory
+    fallback existing. Both were correct, they're different mechanisms:
+    `CONFIG_BOOTLOADER_APP_ROLLBACK_ENABLE`'s rollback works entirely on
+    each otadata record's img_state byte and never touches the record's
+    CRC/sequence validity, so it can never reach the factory-fallback code
+    path. `CONFIG_BOOTLOADER_FACTORY_RESET` reaches that same
+    pre-existing fallback (in `bootloader_utility_get_selected_boot_partition()`)
+    by an entirely different route — `CONFIG_BOOTLOADER_OTA_DATA_ERASE`
+    deliberately erases otadata outright, which *does* affect CRC/sequence
+    validity and correctly lands on `factory`.
+  - **The remaining gap: `CONFIG_BOOTLOADER_OTA_DATA_ERASE` only erases
+    otadata, not this launcher's own NVS "last app" pointer** (a separate
+    partition/namespace). Left alone, `app_main()` would read the same
+    crashing slot straight back out of NVS and immediately re-arm a fresh
+    direct-boot into it, undoing the recovery within the same boot — the
+    same class of bug that defeated attempt 2 (issue #27). Two fixes were
+    considered: wiping the whole NVS partition on trigger too (via
+    `CONFIG_BOOTLOADER_DATA_FACTORY_RESET`, which defaults to `"nvs"` the
+    moment `CONFIG_BOOTLOADER_FACTORY_RESET` is enabled) would work with
+    zero new app-level code, but also silently wipes WiFi credentials and
+    OTA-cached slot names/versions on every recovery, since they currently
+    share one NVS partition with `last_app`. Instead,
+    `CONFIG_BOOTLOADER_DATA_FACTORY_RESET` is left blank in
+    `sdkconfig.defaults`, and `boot_logic_decide()` gained one new input,
+    `otadata_matches_last_app`: `app_main()` computes it by comparing a
+    fresh `esp_ota_get_boot_partition()` read (standard `app_update` API,
+    mirrors the bootloader's own selection logic, confirmed against its
+    actual source) against the remembered `last_app_partition`. A mismatch
+    — exactly what an otadata erase produces, since it resolves to
+    `factory` instead — forces the menu without touching NVS at all. Still
+    a small, pure, chip-agnostic addition, unit-tested the same way as the
+    rest of `boot_logic.c` (see `test/test_boot_logic.c`).
+  - **Not yet confirmed on real hardware across all three chip targets** —
+    everything above is verified against the actual ESP-IDF v5.5 source and
+    passes host-based unit tests plus clean docker builds for
+    esp32/esp32s3/esp32c3, but given this exact issue's history of two
+    prior "fixes" that looked correct and failed on real hardware, treat
+    this as unconfirmed until it's been through an actual crash-loop on a
+    device.
 - **App-slot menu labels never read a name out of the flashed image itself
   (issue #22).** A first attempt used `esp_app_desc_t.project_name` via
   `esp_ota_get_partition_description()`, but real-hardware testing showed
