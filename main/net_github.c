@@ -11,7 +11,12 @@
 
 static const char *TAG = "net_github";
 
-#define RELEASES_MAX_BYTES 16384
+/* Tags are name + commit sha/url only, tens of bytes each -- generous
+ * headroom over NET_GITHUB_MAX_TAGS worth even so. */
+#define TAGS_MAX_BYTES 4096
+/* One release's full data including its own assets[] -- measured up to
+ * ~19KB for a real 12-asset release (issue #34); sized well above that. */
+#define RELEASE_MAX_BYTES 32768
 #define RELEASE_MANIFEST_MAX_BYTES 2048
 
 static void copy_json_string(const cJSON *obj, const char *key, char *dst, size_t dst_size) {
@@ -24,16 +29,15 @@ static void copy_json_string(const cJSON *obj, const char *key, char *dst, size_
     }
 }
 
-esp_err_t net_github_fetch_releases(const char *repo, net_github_release_list_t *out) {
+esp_err_t net_github_fetch_tags(const char *repo, net_github_tag_list_t *out) {
     memset(out, 0, sizeof(*out));
 
     char url[192];
-    snprintf(url, sizeof(url), "https://api.github.com/repos/%s/releases?per_page=%d", repo,
-              NET_GITHUB_MAX_RELEASES);
+    snprintf(url, sizeof(url), "https://api.github.com/repos/%s/tags?per_page=%d", repo, NET_GITHUB_MAX_TAGS);
 
     char *body = NULL;
     int body_len = 0;
-    esp_err_t err = net_http_fetch_to_buffer(url, RELEASES_MAX_BYTES, &body, &body_len);
+    esp_err_t err = net_http_fetch_to_buffer(url, TAGS_MAX_BYTES, &body, &body_len);
     if (err != ESP_OK) {
         ESP_LOGE(TAG, "fetch '%s' failed: %s", url, esp_err_to_name(err));
         return err;
@@ -42,51 +46,91 @@ esp_err_t net_github_fetch_releases(const char *repo, net_github_release_list_t 
     cJSON *root = cJSON_ParseWithLength(body, body_len);
     free(body);
     if (!cJSON_IsArray(root)) {
-        ESP_LOGE(TAG, "GitHub releases response for '%s' is not a JSON array", repo);
+        ESP_LOGE(TAG, "GitHub tags response for '%s' is not a JSON array", repo);
         cJSON_Delete(root);
         return ESP_ERR_INVALID_RESPONSE;
     }
 
     int count = cJSON_GetArraySize(root);
-    for (int i = 0; i < count && out->count < NET_GITHUB_MAX_RELEASES; i++) {
-        cJSON *rel = cJSON_GetArrayItem(root, i);
-        if (!cJSON_IsObject(rel)) {
+    for (int i = 0; i < count && out->count < NET_GITHUB_MAX_TAGS; i++) {
+        cJSON *tag = cJSON_GetArrayItem(root, i);
+        if (!cJSON_IsObject(tag)) {
             continue;
         }
-        if (cJSON_IsTrue(cJSON_GetObjectItemCaseSensitive(rel, "draft"))) {
-            continue; /* no stable assets to offer yet */
-        }
-
-        net_github_release_t *dst = &out->releases[out->count];
-        copy_json_string(rel, "tag_name", dst->tag_name, sizeof(dst->tag_name));
-        if (dst->tag_name[0] == '\0') {
+        char name[NET_GITHUB_TAG_LEN];
+        copy_json_string(tag, "name", name, sizeof(name));
+        if (name[0] == '\0') {
             continue;
         }
-
-        cJSON *assets = cJSON_GetObjectItemCaseSensitive(rel, "assets");
-        if (cJSON_IsArray(assets)) {
-            int asset_count = cJSON_GetArraySize(assets);
-            for (int j = 0; j < asset_count && dst->asset_count < NET_GITHUB_MAX_ASSETS_PER_RELEASE; j++) {
-                cJSON *a = cJSON_GetArrayItem(assets, j);
-                if (!cJSON_IsObject(a)) {
-                    continue;
-                }
-                net_github_asset_t *asset_dst = &dst->assets[dst->asset_count];
-                copy_json_string(a, "name", asset_dst->name, sizeof(asset_dst->name));
-                copy_json_string(a, "browser_download_url", asset_dst->download_url, sizeof(asset_dst->download_url));
-                if (asset_dst->name[0] == '\0' || asset_dst->download_url[0] == '\0') {
-                    continue;
-                }
-                cJSON *size_item = cJSON_GetObjectItemCaseSensitive(a, "size");
-                asset_dst->size = cJSON_IsNumber(size_item) ? (uint32_t)size_item->valuedouble : 0;
-                dst->asset_count++;
-            }
-        }
+        strncpy(out->names[out->count], name, NET_GITHUB_TAG_LEN - 1);
+        out->names[out->count][NET_GITHUB_TAG_LEN - 1] = '\0';
         out->count++;
     }
 
     cJSON_Delete(root);
-    ESP_LOGI(TAG, "fetched %d release(s) for '%s'", (int)out->count, repo);
+    ESP_LOGI(TAG, "fetched %d tag(s) for '%s'", (int)out->count, repo);
+    return ESP_OK;
+}
+
+static void parse_release_object(const cJSON *rel, net_github_release_t *dst) {
+    memset(dst, 0, sizeof(*dst));
+    copy_json_string(rel, "tag_name", dst->tag_name, sizeof(dst->tag_name));
+
+    cJSON *assets = cJSON_GetObjectItemCaseSensitive(rel, "assets");
+    if (!cJSON_IsArray(assets)) {
+        return;
+    }
+    int asset_count = cJSON_GetArraySize(assets);
+    for (int j = 0; j < asset_count && dst->asset_count < NET_GITHUB_MAX_ASSETS_PER_RELEASE; j++) {
+        cJSON *a = cJSON_GetArrayItem(assets, j);
+        if (!cJSON_IsObject(a)) {
+            continue;
+        }
+        net_github_asset_t *asset_dst = &dst->assets[dst->asset_count];
+        copy_json_string(a, "name", asset_dst->name, sizeof(asset_dst->name));
+        copy_json_string(a, "browser_download_url", asset_dst->download_url, sizeof(asset_dst->download_url));
+        if (asset_dst->name[0] == '\0' || asset_dst->download_url[0] == '\0') {
+            continue;
+        }
+        cJSON *size_item = cJSON_GetObjectItemCaseSensitive(a, "size");
+        asset_dst->size = cJSON_IsNumber(size_item) ? (uint32_t)size_item->valuedouble : 0;
+        dst->asset_count++;
+    }
+}
+
+esp_err_t net_github_fetch_release_by_tag(const char *repo, const char *tag, net_github_release_t *out) {
+    memset(out, 0, sizeof(*out));
+
+    char url[224];
+    snprintf(url, sizeof(url), "https://api.github.com/repos/%s/releases/tags/%s", repo, tag);
+
+    char *body = NULL;
+    int body_len = 0;
+    esp_err_t err = net_http_fetch_to_buffer(url, RELEASE_MAX_BYTES, &body, &body_len);
+    if (err != ESP_OK) {
+        /* Covers the "no release for this tag" case too -- GitHub answers
+         * that with a plain HTTP 404, which net_http_fetch_to_buffer()
+         * already turns into ESP_FAIL via its status-code check. */
+        ESP_LOGE(TAG, "fetch '%s' failed: %s", url, esp_err_to_name(err));
+        return err;
+    }
+
+    cJSON *root = cJSON_ParseWithLength(body, body_len);
+    free(body);
+    if (!cJSON_IsObject(root)) {
+        ESP_LOGE(TAG, "GitHub release-by-tag response for '%s'/'%s' is not a JSON object", repo, tag);
+        cJSON_Delete(root);
+        return ESP_ERR_INVALID_RESPONSE;
+    }
+
+    parse_release_object(root, out);
+    cJSON_Delete(root);
+
+    if (out->tag_name[0] == '\0') {
+        ESP_LOGE(TAG, "release response for '%s'/'%s' has no tag_name", repo, tag);
+        return ESP_ERR_NOT_FOUND;
+    }
+    ESP_LOGI(TAG, "fetched release '%s' for '%s': %d asset(s)", out->tag_name, repo, (int)out->asset_count);
     return ESP_OK;
 }
 

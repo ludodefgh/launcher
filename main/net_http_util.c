@@ -1,10 +1,14 @@
 #include "net_http_util.h"
 
 #include <stdbool.h>
+#include <stdint.h>
 #include <stdlib.h>
 #include <string.h>
 
 #include "esp_crt_bundle.h"
+#include "esp_log.h"
+
+static const char *TAG = "net_http_util";
 
 #define MAX_REDIRECTS 5
 
@@ -66,6 +70,19 @@ esp_err_t net_http_fetch_to_buffer(const char *url, size_t max_bytes, char **out
         return ESP_FAIL;
     }
 
+    /* Catch an oversized response as early as possible when the server told
+     * us its size upfront (issue #34) -- content_length is -1 if unknown
+     * (e.g. chunked transfer encoding), in which case the post-read probe
+     * below is the only way to detect it. */
+    int64_t content_length = esp_http_client_get_content_length(client);
+    if (content_length > 0 && (size_t)content_length > max_bytes) {
+        ESP_LOGE(TAG, "response for '%s' is %lld bytes, exceeds %u-byte buffer", url, (long long)content_length,
+                 (unsigned)max_bytes);
+        esp_http_client_close(client);
+        esp_http_client_cleanup(client);
+        return ESP_ERR_INVALID_SIZE;
+    }
+
     char *buf = malloc(max_bytes + 1);
     if (buf == NULL) {
         esp_http_client_close(client);
@@ -86,6 +103,22 @@ esp_err_t net_http_fetch_to_buffer(const char *url, size_t max_bytes, char **out
             break;
         }
         total += (size_t)n;
+    }
+
+    if (total == max_bytes) {
+        /* Buffer filled exactly -- ambiguous whether that's the whole body
+         * or it got cut off (no Content-Length caught above, e.g. a chunked
+         * response). One more small read disambiguates: anything still
+         * pending means it was truncated. */
+        char probe[1];
+        int n = esp_http_client_read(client, probe, sizeof(probe));
+        if (n > 0) {
+            free(buf);
+            esp_http_client_close(client);
+            esp_http_client_cleanup(client);
+            ESP_LOGE(TAG, "response for '%s' exceeds %u-byte buffer (truncated)", url, (unsigned)max_bytes);
+            return ESP_ERR_INVALID_SIZE;
+        }
     }
     buf[total] = '\0';
 

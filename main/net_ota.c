@@ -277,51 +277,63 @@ void net_ota_run_download_flow(const nav_input_driver_t *drv) {
     const net_manifest_entry_t *entry = &manifest.entries[app_idx];
 
     if (entry->github_repo[0] != '\0') {
-        show_message("LOADING RELEASES...", NULL);
-        static net_github_release_list_t releases;
-        if (net_github_fetch_releases(entry->github_repo, &releases) != ESP_OK || releases.count == 0) {
-            show_message("RELEASES FAILED", "check github_repo in manifest");
+        /* Two-stage fetch (issue #34): tags first (name only, cheap), then
+         * exactly one release's full data -- including its assets -- once
+         * the user has actually picked a tag. Fetching every release's full
+         * data up front (the original approach) overflowed even a 16KB
+         * buffer on a real repo with a handful of asset-heavy releases. */
+        show_message("LOADING VERSIONS...", NULL);
+        static net_github_tag_list_t tags;
+        if (net_github_fetch_tags(entry->github_repo, &tags) != ESP_OK || tags.count == 0) {
+            show_message("VERSIONS FAILED", "check github_repo in manifest");
             vTaskDelay(pdMS_TO_TICKS(2000));
             return;
         }
 
-        const char *release_labels[NET_GITHUB_MAX_RELEASES];
-        for (size_t i = 0; i < releases.count; i++) {
-            release_labels[i] = releases.releases[i].tag_name;
+        const char *tag_labels[NET_GITHUB_MAX_TAGS];
+        for (size_t i = 0; i < tags.count; i++) {
+            tag_labels[i] = tags.names[i];
         }
-        int version_idx = run_picker(drv, "CHOOSE VERSION", release_labels, (int)releases.count);
+        int version_idx = run_picker(drv, "CHOOSE VERSION", tag_labels, (int)tags.count);
         if (version_idx < 0) {
             return; /* cancelled */
         }
-        const net_github_release_t *release = &releases.releases[version_idx];
+
+        show_message("LOADING RELEASE...", NULL);
+        static net_github_release_t release;
+        if (net_github_fetch_release_by_tag(entry->github_repo, tags.names[version_idx], &release) != ESP_OK) {
+            show_message("RELEASE FAILED", "no release for this tag?");
+            vTaskDelay(pdMS_TO_TICKS(2000));
+            return;
+        }
 
         const net_github_asset_t *chosen_asset = NULL;
-        esp_err_t resolve_err = net_github_resolve_target_asset(release, &chosen_asset);
+        esp_err_t resolve_err = net_github_resolve_target_asset(&release, &chosen_asset);
         if (resolve_err != ESP_OK) {
             /* No launcher.manifest.json on this release (or it doesn't cover
              * this chip target) -- fall back to a manual asset pick, same
              * as any repo that hasn't adopted the manifest yet (see
              * docs/launcher-manifest.md). */
-            if (release->asset_count == 0) {
+            if (release.asset_count == 0) {
                 show_message("NO ASSETS", "this release has none");
                 vTaskDelay(pdMS_TO_TICKS(2000));
                 return;
             }
             const char *asset_labels[NET_GITHUB_MAX_ASSETS_PER_RELEASE];
-            for (size_t i = 0; i < release->asset_count; i++) {
-                asset_labels[i] = release->assets[i].name;
+            for (size_t i = 0; i < release.asset_count; i++) {
+                asset_labels[i] = release.assets[i].name;
             }
-            int asset_idx = run_picker(drv, "CHOOSE ASSET", asset_labels, (int)release->asset_count);
+            int asset_idx = run_picker(drv, "CHOOSE ASSET", asset_labels, (int)release.asset_count);
             if (asset_idx < 0) {
                 return; /* cancelled */
             }
-            chosen_asset = &release->assets[asset_idx];
+            chosen_asset = &release.assets[asset_idx];
         }
 
         memset(&resolved_entry, 0, sizeof(resolved_entry));
         snprintf(resolved_entry.name, sizeof(resolved_entry.name), "%s", entry->name);
         snprintf(resolved_entry.slot, sizeof(resolved_entry.slot), "%s", entry->slot);
-        snprintf(resolved_entry.version, sizeof(resolved_entry.version), "%s", release->tag_name);
+        snprintf(resolved_entry.version, sizeof(resolved_entry.version), "%s", release.tag_name);
         snprintf(resolved_entry.url, sizeof(resolved_entry.url), "%s", chosen_asset->download_url);
         resolved_entry.size = chosen_asset->size;
         entry = &resolved_entry;
