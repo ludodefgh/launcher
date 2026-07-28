@@ -141,36 +141,6 @@ menu "Bootloader Launcher Configuration"
             string "NVS namespace shared by launcher/apps"
             default "launcher"
 
-        config LAUNCHER_CRASH_LOOP_RECOVERY_ENABLE
-            bool "Enable crash-loop recovery (app rollback)"
-            default y
-            select BOOTLOADER_APP_ROLLBACK_ENABLE
-            help
-                Recovers from a guest app that crashes on every boot (bad OTA,
-                bug, whatever) by enabling ESP-IDF's bootloader-level app
-                rollback (BOOTLOADER_APP_ROLLBACK_ENABLE) -- see issue #23.
-
-                An earlier attempt tracked crashes with an NVS counter checked
-                in the launcher's own app_main(), but that turned out to be
-                dead code on real hardware: esp_ota_set_boot_partition()
-                redirects the *bootloader* itself, permanently, so the
-                launcher never runs again once a guest has been direct-booted
-                -- crash or not. Rollback works at the right layer instead:
-                the bootloader itself tracks each slot's confirmed/pending
-                state and falls back to this launcher (the factory partition)
-                before any application code runs, crash-fast or not.
-
-                This requires guest cooperation: every guest app must call
-                esp_ota_mark_app_valid_cancel_rollback() (standard ESP-IDF
-                app_update API) early in its own startup, once it knows it's
-                healthy -- see README.md "Design decisions" for exactly why,
-                and for a caveat about re-downloading the currently-running
-                slot that boot_into.c compensates for. A guest that never
-                calls it just always rolls back on any reset, which is a
-                safe default, not a silent trap -- but it does mean a
-                well-behaved guest that skips this call never benefits from
-                staying "confirmed valid" between boots.
-
     endmenu
 
     menu "Network (optional)"

@@ -76,9 +76,7 @@ static void handle_select_write(const char *value) {
     }
 
     ESP_LOGI(TAG, "remote (BLE) boot request for '%s'", label);
-    /* fresh_selection=true: a deliberate pick, same as a menu selection --
-     * see boot_into.h, issue #27. */
-    esp_err_t err = boot_into(label, true);
+    esp_err_t err = boot_into(label);
     /* Only reached if boot_into() failed -- esp_restart() never returns on success. */
     ESP_LOGW(TAG, "remote (BLE) boot into '%s' failed: %s", label, esp_err_to_name(err));
 }

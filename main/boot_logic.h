@@ -24,10 +24,6 @@ typedef struct {
     char last_app_partition[BOOT_LOGIC_MAX_LABEL_LEN];
     bool force_menu;                             /* consumed force_menu flag from NVS */
     bool button_held;                            /* encoder button held at boot */
-    bool last_app_flagged_unhealthy;             /* esp_ota_get_state_partition() found
-                                                    * last_app_partition marked ABORTED/INVALID by
-                                                    * ESP-IDF's app-rollback mechanism -- see issue
-                                                    * #27 follow-up */
 } boot_decision_input_t;
 
 typedef enum {
@@ -35,24 +31,26 @@ typedef enum {
     BOOT_ACTION_SHOW_MENU,
 } boot_action_t;
 
-/* Implements: show the menu if force_menu, the button is held, there is no
- * remembered app, or the remembered app was flagged unhealthy by rollback;
- * otherwise boot straight into the remembered app.
+/* Implements: show the menu if force_menu, or the button is held, or there
+ * is no remembered app yet; otherwise boot straight into the remembered app.
  *
- * NOTE on crash-loop recovery (issue #23): an NVS-based crash-streak counter
- * was tried here and reverted -- confirmed on real hardware to be dead code,
- * since esp_ota_set_boot_partition() redirects the bootloader itself
- * permanently, so app_main() (and this function) never runs again once a
- * guest app has been direct-booted, crash or not. Recovery is now handled at
- * the bootloader level instead via ESP-IDF's own app-rollback mechanism
- * (CONFIG_BOOTLOADER_APP_ROLLBACK_ENABLE, selected by
- * CONFIG_LAUNCHER_CRASH_LOOP_RECOVERY_ENABLE) -- see boot_into.c and
- * README.md "Design decisions". This module's only role in that is the
- * last_app_flagged_unhealthy check above: once the bootloader's own rollback
- * logic has flagged the remembered app, this launcher must not blindly
- * retry it via ordinary "has_last_app" direct-boot logic, or it would just
- * re-arm a fresh rollback cycle and the user would never actually see the
- * menu (issue #27 follow-up). */
+ * NOTE on crash-loop recovery (issue #23): two attempts at automatic
+ * recovery from a fast-crashing guest app were tried here and both
+ * reverted, confirmed on real hardware:
+ *   1. An NVS-based crash-streak counter checked in app_main() -- dead
+ *      code, since esp_ota_set_boot_partition() redirects the bootloader
+ *      itself permanently, so app_main() never runs again once a guest app
+ *      has been direct-booted, crash or not.
+ *   2. ESP-IDF's own bootloader-level app rollback
+ *      (CONFIG_BOOTLOADER_APP_ROLLBACK_ENABLE) -- runs at the right layer
+ *      (before any application code), but per ESP-IDF's own documentation
+ *      ("Only OTA partitions can be rolled back. Factory partition is not
+ *      rolled back.") it structurally cannot ever fall back to this
+ *      launcher's factory partition, confirmed by repeated real-hardware
+ *      testing across issues #23/#25/#27 never recovering.
+ * This module has no role in crash-loop recovery as a result -- see
+ * README.md "Design decisions" for the full history and the open design
+ * question on what (if anything) replaces it. */
 boot_action_t boot_logic_decide(const boot_decision_input_t *input);
 
 /* True if the first byte of a partition looks like a valid ESP-IDF app
