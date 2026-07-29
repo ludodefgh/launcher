@@ -484,26 +484,64 @@ assistant working in a *different* repo to generate a compliant one.
 ### Remote control (`CONFIG_LAUNCHER_NET_REMOTE_CONTROL_ENABLE`)
 
 Either transport calls the exact same `boot_into()` used by the local menu
-— network is just another event source, per spec.
+for booting — network is just another event source, per spec. Beyond
+booting, both transports now also cover writing a new binary into a slot
+remotely (issues #32/#33), superseding the original spec's "boot-only"
+scope now that a concrete need (a phone-based companion app, EspOTG) showed
+up.
 
-- **HTTP** (`main/net_remote_http.c`): `esp_http_server` on port 80. `GET /`
-  lists slots with a boot button (and a PIN field if configured); `GET
-  /boot?slot=<label>&pin=<pin>` triggers the boot. Requires WiFi.
-  **Deliberately boot-only, no remote-triggered OTA download** — matches
-  the original spec's scope for this feature ("list slots and trigger
-  boot"), and the on-device "Telecharger un programme" menu entry already
-  covers that case (see issue #18). Revisit if a concrete need comes up.
+- **HTTP** (`main/net_remote_http.c`): `esp_http_server` on port 80.
+  - `GET /` lists slots with a boot button (and a PIN field if configured).
+  - `GET /boot?slot=<label>&pin=<pin>` triggers the boot.
+  - `POST /wifi?pin=<pin>` with body `ssid=<ssid>&pass=<pass>` persists WiFi
+    credentials remotely (`net_wifi_save_credentials()`, issue #32) — takes
+    effect on the next reconnect/boot, no live reconnect attempted (this
+    request is itself running over the *current* WiFi connection). Can only
+    *update* already-working credentials: this endpoint isn't reachable at
+    all until WiFi is already up, since `net_remote_http_start()` only runs
+    after `net_wifi_connect()` succeeds. Bootstrapping a device with no
+    working credentials yet needs the BLE characteristic below instead.
+  - `POST /upload?slot=<label>&pin=<pin>` with the raw `.bin` as the request
+    body writes it straight into that slot via `esp_ota_begin`/`write`/`end`
+    (issue #33) — no manifest/repo/URL involved at all, distinct from the
+    manifest-driven OTA flow. The request itself is treated as confirmation
+    (no separate confirm step, matching `/boot`). Rejected upfront if
+    `Content-Length` exceeds the target partition's size.
+  All four require WiFi; `/wifi` and `/upload` both require the PIN if one
+  is configured, same `pin_ok()` check as `/boot`.
 - **BLE** (`main/net_remote_ble.c`): a minimal NimBLE GATT peripheral, no
   pairing/bonding (PIN is checked at the application layer instead, same as
   HTTP, to keep both transports symmetric and avoid NimBLE's much larger
   security-manager surface for what's meant to be a trusted-home-network
-  feature). One service, two characteristics: a READ one returning the slot
-  list as one record per line, tab-separated
-  `label\tname\tversion\tflashed` (`name` from `app_registry_resolve_label`,
-  `flashed` = `1`/`0`), so a BLE client shows the same rows as the TFT menu
-  and the HTTP remote instead of raw labels; and a WRITE one accepting
-  `<slot_label>` or `<slot_label>:<pin>` as plain ASCII to trigger the boot
-  (still keyed by the raw partition label). Independent of WiFi.
+  feature). One service, characteristics (some conditional on which other
+  network features are enabled — a BLE client should discover them rather
+  than assume a fixed set):
+  - READ, always present: the slot list, one record per line, tab-separated
+    `label\tname\tversion\tflashed` (`name` from `app_registry_resolve_label`,
+    `flashed` = `1`/`0`), so a BLE client shows the same rows as the TFT menu
+    and the HTTP remote instead of raw labels.
+  - WRITE, always present: `<slot_label>` or `<slot_label>:<pin>` as plain
+    ASCII, triggers the boot (still keyed by the raw partition label).
+  - WRITE, only when `CONFIG_LAUNCHER_NET_OTA_ENABLE`: same
+    `<slot_label>` / `<slot_label>:<pin>` shape, but triggers
+    `net_ota_update_slot_from_manifest()` instead of booting — looks up the
+    manifest entry whose `slot` matches, downloads it (auto-picking the
+    *newest* release for a `github_repo` entry — no remote version-picker
+    round trip yet, an older-version rollback still needs the local menu),
+    with no local UI at all. Runs on its own task, not inline in the GATT
+    callback (the download can take several seconds). **Fire-and-forget**:
+    no progress/result reported back over BLE yet — re-read the slots
+    characteristic afterward to see whether the version/flashed state
+    changed.
+  - WRITE, only when `CONFIG_LAUNCHER_NET_WIFI_ENABLE`: payload
+    `ssid\tpass\tpin` (tab-separated; `pass`/`pin` may be empty strings but
+    the tabs must be present), persists WiFi credentials
+    (`net_wifi_save_credentials()`, issue #32). Unlike the HTTP endpoint,
+    this one *can* bootstrap a device with no working WiFi yet — BLE has no
+    dependency on WiFi already being connected.
+  Independent of WiFi itself (the service starts regardless), though the
+  OTA-update and WiFi-write characteristics above are each gated on the
+  Kconfig option for the feature they depend on.
 
   **Manual menuconfig step required**: Kconfig's `select` cannot force a
   specific member of a `choice` block (a real Kconfig limitation — see

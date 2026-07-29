@@ -146,7 +146,8 @@ static void draw_progress(size_t downloaded) {
     display_draw_text(MARGIN_X, 124, line, DISPLAY_COLOR_BLACK, DISPLAY_COLOR_WHITE, 1);
 }
 
-static esp_err_t download_to_partition(const net_manifest_entry_t *entry, const esp_partition_t *dest) {
+static esp_err_t download_to_partition(const net_manifest_entry_t *entry, const esp_partition_t *dest,
+                                        bool show_progress) {
     bool is_https = strncmp(entry->url, "https://", 8) == 0;
     esp_http_client_config_t config = {
         .url = entry->url,
@@ -208,7 +209,7 @@ static esp_err_t download_to_partition(const net_manifest_entry_t *entry, const 
             return err;
         }
         total += n;
-        if (total % (16 * 1024) < (size_t)n) {
+        if (show_progress && total % (16 * 1024) < (size_t)n) {
             draw_progress(total);
         }
     }
@@ -387,7 +388,7 @@ void net_ota_run_download_flow(const nav_input_driver_t *drv) {
     }
 
     show_message("DOWNLOADING...", "0 KB...");
-    esp_err_t err = download_to_partition(entry, dest);
+    esp_err_t err = download_to_partition(entry, dest, /*show_progress=*/true);
     if (err == ESP_OK) {
         /* Record the manifest's own name for this slot now, while we still
          * have it -- lets the menu show a meaningful label afterward
@@ -415,4 +416,97 @@ void net_ota_run_download_flow(const nav_input_driver_t *drv) {
         show_message("DOWNLOAD FAILED", esp_err_to_name(err));
     }
     vTaskDelay(pdMS_TO_TICKS(1500));
+}
+
+esp_err_t net_ota_update_slot_from_manifest(const char *slot_label) {
+    if (!net_wifi_connect()) {
+        ESP_LOGW(TAG, "no WiFi -- cannot update slot '%s'", slot_label);
+        return ESP_ERR_INVALID_STATE;
+    }
+
+    net_manifest_t manifest;
+    if (net_manifest_fetch(&manifest) != ESP_OK) {
+        ESP_LOGW(TAG, "manifest fetch failed -- cannot update slot '%s'", slot_label);
+        return ESP_FAIL;
+    }
+
+    const net_manifest_entry_t *entry = NULL;
+    for (size_t i = 0; i < manifest.count; i++) {
+        if (strcmp(manifest.entries[i].slot, slot_label) == 0) {
+            entry = &manifest.entries[i];
+            break;
+        }
+    }
+    if (entry == NULL) {
+        ESP_LOGW(TAG, "no manifest entry declares slot '%s'", slot_label);
+        return ESP_ERR_NOT_FOUND;
+    }
+
+    /* github_repo entries always resolve to the newest release here -- no
+     * remote version-picker round trip exists yet, unlike the interactive
+     * "CHOOSE VERSION" step in net_ota_run_download_flow() above. Installing
+     * an older version (e.g. to roll back) still needs the local menu. */
+    net_manifest_entry_t resolved_entry;
+    if (entry->github_repo[0] != '\0') {
+        net_github_tag_list_t tags;
+        if (net_github_fetch_tags(entry->github_repo, &tags) != ESP_OK || tags.count == 0) {
+            ESP_LOGW(TAG, "no releases found for '%s'", entry->github_repo);
+            return ESP_ERR_NOT_FOUND;
+        }
+        net_github_release_t release;
+        if (net_github_fetch_release_by_tag(entry->github_repo, tags.names[0], &release) != ESP_OK) {
+            ESP_LOGW(TAG, "failed to fetch latest release '%s' for '%s'", tags.names[0], entry->github_repo);
+            return ESP_FAIL;
+        }
+        const net_github_asset_t *chosen_asset = NULL;
+        if (net_github_resolve_target_asset(&release, &chosen_asset) != ESP_OK) {
+            /* No launcher.manifest.json (or no entry for this chip target)
+             * -- can't fall back to a manual asset pick here, there's no UI
+             * to pick from. */
+            ESP_LOGW(TAG,
+                     "cannot auto-resolve an asset for '%s' release '%s' (no launcher.manifest.json for this "
+                     "target?)",
+                     entry->github_repo, release.tag_name);
+            return ESP_ERR_NOT_SUPPORTED;
+        }
+        memset(&resolved_entry, 0, sizeof(resolved_entry));
+        snprintf(resolved_entry.name, sizeof(resolved_entry.name), "%s", entry->name);
+        snprintf(resolved_entry.slot, sizeof(resolved_entry.slot), "%s", entry->slot);
+        snprintf(resolved_entry.version, sizeof(resolved_entry.version), "%s", release.tag_name);
+        snprintf(resolved_entry.url, sizeof(resolved_entry.url), "%s", chosen_asset->download_url);
+        resolved_entry.size = chosen_asset->size;
+        entry = &resolved_entry;
+    }
+
+    const esp_partition_t *dest =
+        esp_partition_find_first(ESP_PARTITION_TYPE_APP, ESP_PARTITION_SUBTYPE_ANY, slot_label);
+    if (dest == NULL) {
+        ESP_LOGW(TAG, "target partition '%s' not found", slot_label);
+        return ESP_ERR_NOT_FOUND;
+    }
+
+    esp_err_t err = download_to_partition(entry, dest, /*show_progress=*/false);
+    if (err != ESP_OK) {
+        return err;
+    }
+
+    bool slot_idx_found = false;
+    size_t slot_idx = 0;
+    for (size_t i = 0; i < app_registry_count(); i++) {
+        if (strcmp(app_registry_partition_label(i), slot_label) == 0) {
+            slot_idx = i;
+            slot_idx_found = true;
+            break;
+        }
+    }
+    if (slot_idx_found) {
+        const char *chosen_name = entry->name[0] != '\0' ? entry->name : entry->url;
+        nvs_state_set_slot_name(slot_idx, chosen_name);
+        if (entry->version[0] != '\0') {
+            nvs_state_set_slot_version(slot_idx, entry->version);
+        }
+    }
+
+    ESP_LOGI(TAG, "remote OTA update of '%s' succeeded (%s %s)", slot_label, entry->name, entry->version);
+    return ESP_OK;
 }

@@ -3,6 +3,7 @@
 #include "boot_into.h"
 #include "nvs_state.h"
 
+#include <stdlib.h>
 #include <string.h>
 #include <stdio.h>
 
@@ -14,7 +15,16 @@
 #include "services/gap/ble_svc_gap.h"
 #include "services/gatt/ble_svc_gatt.h"
 #include "esp_log.h"
+#include "freertos/FreeRTOS.h"
+#include "freertos/task.h"
 #include "sdkconfig.h"
+
+#if CONFIG_LAUNCHER_NET_WIFI_ENABLE
+#include "net_wifi.h"
+#endif
+#if CONFIG_LAUNCHER_NET_OTA_ENABLE
+#include "net_ota.h"
+#endif
 
 static const char *TAG = "net_remote_ble";
 
@@ -31,37 +41,76 @@ static const ble_uuid128_t s_slots_chr_uuid =
     BLE_UUID128_INIT(0x4c, 0x41, 0x55, 0x4e, 0x43, 0x48, 0x00, 0x01, 0x00, 0x01, 0x00, 0x01, 0x00, 0x01, 0x00, 0x02);
 static const ble_uuid128_t s_select_chr_uuid =
     BLE_UUID128_INIT(0x4c, 0x41, 0x55, 0x4e, 0x43, 0x48, 0x00, 0x01, 0x00, 0x01, 0x00, 0x01, 0x00, 0x01, 0x00, 0x03);
+#if CONFIG_LAUNCHER_NET_OTA_ENABLE
+/* Triggers net_ota_update_slot_from_manifest() for a slot (issue #33's
+ * companion feature) -- not part of #33 itself, which is about pushing a
+ * raw binary with no manifest involved; this is "go fetch and install
+ * whatever the manifest currently says for this slot," headless, no local
+ * UI. Only compiled in when OTA is (net_ota_update_slot_from_manifest()
+ * lives in net_ota.c, itself gated the same way -- see CMakeLists.txt). */
+static const ble_uuid128_t s_ota_update_chr_uuid =
+    BLE_UUID128_INIT(0x4c, 0x41, 0x55, 0x4e, 0x43, 0x48, 0x00, 0x01, 0x00, 0x01, 0x00, 0x01, 0x00, 0x01, 0x00, 0x04);
+#endif
+#if CONFIG_LAUNCHER_NET_WIFI_ENABLE
+/* Persists WiFi credentials (issue #32). Unlike the HTTP transport's
+ * /wifi endpoint, this one *can* bootstrap a device with no working WiFi
+ * yet -- BLE has no dependency on WiFi already being up (see
+ * net_remote_ble_start() below), the HTTP server does. Only compiled in
+ * when WiFi support itself is (no point exposing this otherwise). */
+static const ble_uuid128_t s_wifi_chr_uuid =
+    BLE_UUID128_INIT(0x4c, 0x41, 0x55, 0x4e, 0x43, 0x48, 0x00, 0x01, 0x00, 0x01, 0x00, 0x01, 0x00, 0x01, 0x00, 0x05);
+#endif
 
 static uint16_t s_slots_val_handle;
 static uint16_t s_select_val_handle;
+#if CONFIG_LAUNCHER_NET_OTA_ENABLE
+static uint16_t s_ota_update_val_handle;
+#endif
+#if CONFIG_LAUNCHER_NET_WIFI_ENABLE
+static uint16_t s_wifi_val_handle;
+#endif
 static char s_slots_text[512];
 static uint8_t s_own_addr_type;
 static bool s_started;
 
 #define SELECT_BUF_LEN 64
 
-static void handle_select_write(const char *value) {
-    char label[32];
+/* Shared by every write characteristic here that takes "value:pin" --
+ * splits on the first ':', trims `value` into `out_value` (capped at
+ * out_value_size), and returns the pin substring (or NULL if there was no
+ * ':' at all -- distinct from an empty pin after a trailing ':'). */
+static const char *split_value_pin(const char *raw, char *out_value, size_t out_value_size) {
     const char *pin = NULL;
-    const char *sep = strchr(value, ':');
+    const char *sep = strchr(raw, ':');
     if (sep != NULL) {
-        size_t label_len = (size_t)(sep - value);
-        if (label_len >= sizeof(label)) {
-            label_len = sizeof(label) - 1;
+        size_t value_len = (size_t)(sep - raw);
+        if (value_len >= out_value_size) {
+            value_len = out_value_size - 1;
         }
-        memcpy(label, value, label_len);
-        label[label_len] = '\0';
+        memcpy(out_value, raw, value_len);
+        out_value[value_len] = '\0';
         pin = sep + 1;
     } else {
-        strncpy(label, value, sizeof(label) - 1);
-        label[sizeof(label) - 1] = '\0';
+        strncpy(out_value, raw, out_value_size - 1);
+        out_value[out_value_size - 1] = '\0';
     }
+    return pin;
+}
 
-    if (CONFIG_LAUNCHER_NET_REMOTE_PIN[0] != '\0') {
-        if (pin == NULL || strcmp(pin, CONFIG_LAUNCHER_NET_REMOTE_PIN) != 0) {
-            ESP_LOGW(TAG, "BLE select write rejected: invalid/missing PIN");
-            return;
-        }
+static bool pin_ok(const char *pin) {
+    if (CONFIG_LAUNCHER_NET_REMOTE_PIN[0] == '\0') {
+        return true;
+    }
+    return pin != NULL && strcmp(pin, CONFIG_LAUNCHER_NET_REMOTE_PIN) == 0;
+}
+
+static void handle_select_write(const char *value) {
+    char label[32];
+    const char *pin = split_value_pin(value, label, sizeof(label));
+
+    if (!pin_ok(pin)) {
+        ESP_LOGW(TAG, "BLE select write rejected: invalid/missing PIN");
+        return;
     }
 
     bool known_slot = false;
@@ -81,6 +130,114 @@ static void handle_select_write(const char *value) {
     /* Only reached if boot_into() failed -- esp_restart() never returns on success. */
     ESP_LOGW(TAG, "remote (BLE) boot into '%s' failed: %s", label, esp_err_to_name(err));
 }
+
+#if CONFIG_LAUNCHER_NET_OTA_ENABLE
+static void ota_update_task(void *param) {
+    char *slot_label = (char *)param;
+    esp_err_t err = net_ota_update_slot_from_manifest(slot_label);
+    ESP_LOGI(TAG, "remote (BLE) OTA update of '%s' finished: %s", slot_label, esp_err_to_name(err));
+    free(slot_label);
+    vTaskDelete(NULL);
+}
+
+/* Fire-and-forget by design: no progress/result reported back over BLE (no
+ * new characteristic for it yet) -- a client re-reads the slots
+ * characteristic afterward to see whether the version/flashed state
+ * changed. Runs on its own task rather than inline here: WiFi connect +
+ * manifest/GitHub fetches + the download itself can take several seconds,
+ * far too long to block a GATT access callback (risks the central's ATT
+ * operation timeout). */
+static void handle_ota_update_write(const char *value) {
+    char label[32];
+    const char *pin = split_value_pin(value, label, sizeof(label));
+
+    if (!pin_ok(pin)) {
+        ESP_LOGW(TAG, "BLE OTA-update write rejected: invalid/missing PIN");
+        return;
+    }
+
+    bool known_slot = false;
+    for (size_t i = 0; i < app_registry_count(); i++) {
+        if (strcmp(app_registry_partition_label(i), label) == 0) {
+            known_slot = true;
+            break;
+        }
+    }
+    if (!known_slot) {
+        ESP_LOGW(TAG, "BLE OTA-update write rejected: unknown slot '%s'", label);
+        return;
+    }
+
+    char *slot_label_copy = strdup(label);
+    if (slot_label_copy == NULL) {
+        ESP_LOGE(TAG, "OTA-update task spawn failed: out of memory");
+        return;
+    }
+    BaseType_t rc = xTaskCreate(ota_update_task, "launcher_ble_ota", CONFIG_LAUNCHER_NET_TASK_STACK_SIZE,
+                                slot_label_copy, tskIDLE_PRIORITY + 5, NULL);
+    if (rc != pdPASS) {
+        ESP_LOGE(TAG, "OTA-update task spawn failed");
+        free(slot_label_copy);
+        return;
+    }
+    ESP_LOGI(TAG, "remote (BLE) OTA update requested for '%s'", label);
+}
+#endif
+
+#if CONFIG_LAUNCHER_NET_WIFI_ENABLE
+/* Payload: "ssid\tpass\tpin" (pass/pin may be empty strings, but the tabs
+ * must be present -- see net_remote_ble.h-adjacent docs / README). Tab
+ * rather than ':' since a WiFi password containing ':' is far more likely
+ * than one containing a literal tab; still not a general escaping scheme,
+ * same pragmatic tradeoff as the rest of this file's wire formats. */
+static void handle_wifi_write(const char *value) {
+    char ssid[33];
+    char pass[65];
+    char pin[64];
+
+    const char *p = value;
+    const char *sep1 = strchr(p, '\t');
+    if (sep1 == NULL) {
+        ESP_LOGW(TAG, "BLE WiFi write rejected: malformed payload (expected ssid\\tpass\\tpin)");
+        return;
+    }
+    size_t ssid_len = (size_t)(sep1 - p);
+    if (ssid_len >= sizeof(ssid)) {
+        ssid_len = sizeof(ssid) - 1;
+    }
+    memcpy(ssid, p, ssid_len);
+    ssid[ssid_len] = '\0';
+    p = sep1 + 1;
+
+    const char *sep2 = strchr(p, '\t');
+    if (sep2 == NULL) {
+        ESP_LOGW(TAG, "BLE WiFi write rejected: malformed payload (expected ssid\\tpass\\tpin)");
+        return;
+    }
+    size_t pass_len = (size_t)(sep2 - p);
+    if (pass_len >= sizeof(pass)) {
+        pass_len = sizeof(pass) - 1;
+    }
+    memcpy(pass, p, pass_len);
+    pass[pass_len] = '\0';
+    p = sep2 + 1;
+
+    strncpy(pin, p, sizeof(pin) - 1);
+    pin[sizeof(pin) - 1] = '\0';
+
+    if (ssid[0] == '\0') {
+        ESP_LOGW(TAG, "BLE WiFi write rejected: empty ssid");
+        return;
+    }
+    if (!pin_ok(pin[0] != '\0' ? pin : NULL)) {
+        ESP_LOGW(TAG, "BLE WiFi write rejected: invalid/missing PIN");
+        return;
+    }
+
+    net_wifi_save_credentials(ssid, pass);
+    ESP_LOGI(TAG, "remote (BLE) WiFi credentials updated for SSID '%s' (effective next reconnect/boot)", ssid);
+}
+#endif
 
 static int gatt_write_to_buf(struct os_mbuf *om, char *dst, uint16_t max_len, uint16_t *out_len) {
     uint16_t om_len = OS_MBUF_PKTLEN(om);
@@ -118,6 +275,35 @@ static int gatt_access_cb(uint16_t conn_handle, uint16_t attr_handle, struct ble
         return 0;
     }
 
+#if CONFIG_LAUNCHER_NET_OTA_ENABLE
+    if (attr_handle == s_ota_update_val_handle && ctxt->op == BLE_GATT_ACCESS_OP_WRITE_CHR) {
+        char buf[SELECT_BUF_LEN];
+        uint16_t len = 0;
+        int rc = gatt_write_to_buf(ctxt->om, buf, sizeof(buf) - 1, &len);
+        if (rc != 0) {
+            return rc;
+        }
+        buf[len] = '\0';
+        handle_ota_update_write(buf);
+        return 0;
+    }
+#endif
+
+#if CONFIG_LAUNCHER_NET_WIFI_ENABLE
+    if (attr_handle == s_wifi_val_handle && ctxt->op == BLE_GATT_ACCESS_OP_WRITE_CHR) {
+        /* ssid(32)+'\t'+pass(64)+'\t'+pin(63)+NUL -- generous over SELECT_BUF_LEN. */
+        char buf[164];
+        uint16_t len = 0;
+        int rc = gatt_write_to_buf(ctxt->om, buf, sizeof(buf) - 1, &len);
+        if (rc != 0) {
+            return rc;
+        }
+        buf[len] = '\0';
+        handle_wifi_write(buf);
+        return 0;
+    }
+#endif
+
     return BLE_ATT_ERR_UNLIKELY;
 }
 
@@ -139,6 +325,22 @@ static const struct ble_gatt_svc_def s_gatt_svcs[] = {
                     .flags = BLE_GATT_CHR_F_WRITE,
                     .val_handle = &s_select_val_handle,
                 },
+#if CONFIG_LAUNCHER_NET_OTA_ENABLE
+                {
+                    .uuid = &s_ota_update_chr_uuid.u,
+                    .access_cb = gatt_access_cb,
+                    .flags = BLE_GATT_CHR_F_WRITE,
+                    .val_handle = &s_ota_update_val_handle,
+                },
+#endif
+#if CONFIG_LAUNCHER_NET_WIFI_ENABLE
+                {
+                    .uuid = &s_wifi_chr_uuid.u,
+                    .access_cb = gatt_access_cb,
+                    .flags = BLE_GATT_CHR_F_WRITE,
+                    .val_handle = &s_wifi_val_handle,
+                },
+#endif
                 {0},
             },
     },

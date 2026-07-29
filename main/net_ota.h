@@ -1,5 +1,6 @@
 #pragma once
 
+#include "esp_err.h"
 #include "nav_input.h"
 
 #ifdef __cplusplus
@@ -19,6 +20,21 @@ extern "C" {
  * it from the normal menu afterward like any other slot.
  */
 void net_ota_run_download_flow(const nav_input_driver_t *drv);
+
+/*
+ * Non-interactive counterpart to net_ota_run_download_flow() above -- looks
+ * up the manifest entry whose "slot" field matches slot_label and downloads
+ * it into that slot with no local UI at all (no pickers, no confirm
+ * prompt, no on-screen progress), meant for a remote trigger (see
+ * net_remote_ble.c) rather than the local menu. For a github_repo entry,
+ * always uses the newest release -- there's no remote version-picker round
+ * trip yet, so installing an older version still needs the local menu.
+ * Requires WiFi already connected or connectable (calls net_wifi_connect()
+ * itself). Blocking -- WiFi connect + manifest/GitHub fetches + the
+ * download itself can take several seconds; callers must run this on a
+ * dedicated task, never inline in a time-sensitive callback.
+ */
+esp_err_t net_ota_update_slot_from_manifest(const char *slot_label);
 
 #ifdef __cplusplus
 }
