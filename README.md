@@ -483,6 +483,11 @@ assistant working in a *different* repo to generate a compliant one.
 
 ### Remote control (`CONFIG_LAUNCHER_NET_REMOTE_CONTROL_ENABLE`)
 
+See [`docs/espotg-integration.md`](docs/espotg-integration.md) for a
+self-contained reference to every endpoint/characteristic below (exact
+UUIDs, payload formats, error behavior) — written for implementing a
+client (e.g. EspOTG) against this API without reading the source.
+
 Either transport calls the exact same `boot_into()` used by the local menu
 for booting — network is just another event source, per spec. Beyond
 booting, both transports now also cover writing a new binary into a slot
