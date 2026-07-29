@@ -527,15 +527,18 @@ up.
     and the HTTP remote instead of raw labels.
   - WRITE, always present: `<slot_label>` or `<slot_label>:<pin>` as plain
     ASCII, triggers the boot (still keyed by the raw partition label).
-  - WRITE, only when `CONFIG_LAUNCHER_NET_OTA_ENABLE`: same
-    `<slot_label>` / `<slot_label>:<pin>` shape, but triggers
-    `net_ota_update_slot_from_manifest()` instead of booting — looks up the
-    manifest entry whose `slot` matches, downloads it (auto-picking the
-    *newest* release for a `github_repo` entry — no remote version-picker
-    round trip yet, an older-version rollback still needs the local menu),
-    with no local UI at all. Runs on its own task, not inline in the GATT
-    callback (the download can take several seconds). **Fire-and-forget**:
-    no progress/result reported back over BLE yet — re-read the slots
+  - WRITE, only when `CONFIG_LAUNCHER_NET_OTA_ENABLE`:
+    `<slot_label>`, `<slot_label>:<pin>`, or either of those followed by
+    `@<version_tag>` (e.g. `app_slot1@v1.2.0` or `app_slot1:1234@v1.2.0`),
+    triggers `net_ota_update_slot_from_manifest()` instead of booting —
+    looks up the manifest entry whose `slot` matches, downloads it, with no
+    local UI at all. For a `github_repo` entry, an explicit `@<version_tag>`
+    fetches that exact GitHub release (`net_github_fetch_release_by_tag()`)
+    instead of always the newest one — a remote caller can now roll back to
+    or pin a specific version without the local menu's interactive "CHOOSE
+    VERSION" step. Runs on its own task, not inline in the GATT callback
+    (the download can take several seconds). **Fire-and-forget**: no
+    progress/result reported back over BLE yet — re-read the slots
     characteristic afterward to see whether the version/flashed state
     changed.
   - WRITE, only when `CONFIG_LAUNCHER_NET_WIFI_ENABLE`: payload

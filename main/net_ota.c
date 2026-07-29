@@ -418,7 +418,7 @@ void net_ota_run_download_flow(const nav_input_driver_t *drv) {
     vTaskDelay(pdMS_TO_TICKS(1500));
 }
 
-esp_err_t net_ota_update_slot_from_manifest(const char *slot_label) {
+esp_err_t net_ota_update_slot_from_manifest(const char *slot_label, const char *version_tag) {
     if (!net_wifi_connect()) {
         ESP_LOGW(TAG, "no WiFi -- cannot update slot '%s'", slot_label);
         return ESP_ERR_INVALID_STATE;
@@ -442,21 +442,29 @@ esp_err_t net_ota_update_slot_from_manifest(const char *slot_label) {
         return ESP_ERR_NOT_FOUND;
     }
 
-    /* github_repo entries always resolve to the newest release here -- no
-     * remote version-picker round trip exists yet, unlike the interactive
-     * "CHOOSE VERSION" step in net_ota_run_download_flow() above. Installing
-     * an older version (e.g. to roll back) still needs the local menu. */
+    /* A non-empty version_tag picks that exact release directly, instead of
+     * always resolving to the newest one -- see the doc comment in net_ota.h.
+     * Ignored (as if NULL) for a plain url/version entry with no github_repo. */
+    bool want_specific_version = version_tag != NULL && version_tag[0] != '\0';
+
     net_manifest_entry_t resolved_entry;
     if (entry->github_repo[0] != '\0') {
-        net_github_tag_list_t tags;
-        if (net_github_fetch_tags(entry->github_repo, &tags) != ESP_OK || tags.count == 0) {
-            ESP_LOGW(TAG, "no releases found for '%s'", entry->github_repo);
-            return ESP_ERR_NOT_FOUND;
-        }
         net_github_release_t release;
-        if (net_github_fetch_release_by_tag(entry->github_repo, tags.names[0], &release) != ESP_OK) {
-            ESP_LOGW(TAG, "failed to fetch latest release '%s' for '%s'", tags.names[0], entry->github_repo);
-            return ESP_FAIL;
+        if (want_specific_version) {
+            if (net_github_fetch_release_by_tag(entry->github_repo, version_tag, &release) != ESP_OK) {
+                ESP_LOGW(TAG, "no release '%s' found for '%s'", version_tag, entry->github_repo);
+                return ESP_ERR_NOT_FOUND;
+            }
+        } else {
+            net_github_tag_list_t tags;
+            if (net_github_fetch_tags(entry->github_repo, &tags) != ESP_OK || tags.count == 0) {
+                ESP_LOGW(TAG, "no releases found for '%s'", entry->github_repo);
+                return ESP_ERR_NOT_FOUND;
+            }
+            if (net_github_fetch_release_by_tag(entry->github_repo, tags.names[0], &release) != ESP_OK) {
+                ESP_LOGW(TAG, "failed to fetch latest release '%s' for '%s'", tags.names[0], entry->github_repo);
+                return ESP_FAIL;
+            }
         }
         const net_github_asset_t *chosen_asset = NULL;
         if (net_github_resolve_target_asset(&release, &chosen_asset) != ESP_OK) {
