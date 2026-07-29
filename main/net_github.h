@@ -32,10 +32,20 @@ extern "C" {
  * actually matters here since assets-per-release, not release count, is the
  * unbounded axis.
  *
+ * Round 2 (issue #34): even a single ~32KB buffered malloc for one release
+ * was observed failing outright on real hardware (WiFi + BLE + display all
+ * resident -- ESP_ERR_NO_MEM, not a network/parse error), and that's not
+ * fixable by just picking a bigger number, nor is it specific to boards
+ * without PSRAM. net_github_fetch_release_by_tag() (net_github.c) reads the
+ * response through a small fixed chunk buffer and extracts only the fields
+ * this module actually needs as they stream past, instead of buffering the
+ * whole serialized response -- see the doc comment above its implementation.
+ *
  * Sizes below are deliberately conservative (static allocation, see
  * net_ota.c) -- a picker over more than a handful of tags/assets isn't very
  * usable on this project's small screen anyway (no scrolling support in
- * net_ota.c's picker).
+ * net_ota.c's picker). NET_GITHUB_MAX_ASSETS_PER_RELEASE can be generous
+ * now that only one release's assets are ever held in memory at a time.
  */
 
 #define NET_GITHUB_MAX_TAGS 6

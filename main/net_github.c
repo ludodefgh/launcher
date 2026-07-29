@@ -1,11 +1,14 @@
 #include "net_github.h"
 #include "net_http_util.h"
 
+#include <ctype.h>
+#include <stdbool.h>
 #include <string.h>
 #include <stdlib.h>
 #include <stdio.h>
 
 #include "cJSON.h"
+#include "esp_http_client.h"
 #include "esp_log.h"
 #include "sdkconfig.h"
 
@@ -14,9 +17,6 @@ static const char *TAG = "net_github";
 /* Tags are name + commit sha/url only, tens of bytes each -- generous
  * headroom over NET_GITHUB_MAX_TAGS worth even so. */
 #define TAGS_MAX_BYTES 4096
-/* One release's full data including its own assets[] -- measured up to
- * ~19KB for a real 12-asset release (issue #34); sized well above that. */
-#define RELEASE_MAX_BYTES 32768
 #define RELEASE_MANIFEST_MAX_BYTES 2048
 
 static void copy_json_string(const cJSON *obj, const char *key, char *dst, size_t dst_size) {
@@ -72,29 +72,340 @@ esp_err_t net_github_fetch_tags(const char *repo, net_github_tag_list_t *out) {
     return ESP_OK;
 }
 
-static void parse_release_object(const cJSON *rel, net_github_release_t *dst) {
-    memset(dst, 0, sizeof(*dst));
-    copy_json_string(rel, "tag_name", dst->tag_name, sizeof(dst->tag_name));
+/*
+ * Streaming JSON scanner for the single-release response (issue #34, round
+ * 2): even one 32KB buffered malloc for a release's full JSON was observed
+ * failing outright on real hardware under heap pressure (WiFi + BLE +
+ * display all resident at once) -- not a parse/network error, the
+ * allocation itself. This reads the HTTP body through a small fixed chunk
+ * buffer and extracts only "tag_name" and each asset's "name" /
+ * "browser_download_url" / "size" as they're encountered, so the whole
+ * serialized response is never held in memory at once, on any board
+ * (PSRAM or not). Not a general-purpose JSON parser -- just enough of one
+ * (generic recursive skip for anything not one of those fields) to walk
+ * GitHub's actual release-object shape correctly regardless of exact field
+ * order/whitespace.
+ */
 
-    cJSON *assets = cJSON_GetObjectItemCaseSensitive(rel, "assets");
-    if (!cJSON_IsArray(assets)) {
-        return;
+typedef struct {
+    esp_http_client_handle_t client;
+    char chunk[512];
+    int chunk_len;
+    int chunk_pos;
+    int la; /* lookahead byte, -1 at EOF/error */
+} json_reader_t;
+
+static int reader_raw_next(json_reader_t *r) {
+    if (r->chunk_pos >= r->chunk_len) {
+        int n = esp_http_client_read(r->client, r->chunk, sizeof(r->chunk));
+        if (n <= 0) {
+            return -1;
+        }
+        r->chunk_len = n;
+        r->chunk_pos = 0;
     }
-    int asset_count = cJSON_GetArraySize(assets);
-    for (int j = 0; j < asset_count && dst->asset_count < NET_GITHUB_MAX_ASSETS_PER_RELEASE; j++) {
-        cJSON *a = cJSON_GetArrayItem(assets, j);
-        if (!cJSON_IsObject(a)) {
+    return (unsigned char)r->chunk[r->chunk_pos++];
+}
+
+static void reader_init(json_reader_t *r, esp_http_client_handle_t client) {
+    r->client = client;
+    r->chunk_len = 0;
+    r->chunk_pos = 0;
+    r->la = reader_raw_next(r);
+}
+
+static void reader_advance(json_reader_t *r) {
+    r->la = reader_raw_next(r);
+}
+
+static void skip_ws(json_reader_t *r) {
+    while (r->la == ' ' || r->la == '\t' || r->la == '\n' || r->la == '\r') {
+        reader_advance(r);
+    }
+}
+
+/* Reads a JSON string (reader must be positioned at the opening quote).
+ * Writes up to out_size-1 decoded bytes into out (NUL-terminated); pass
+ * out=NULL to just consume/discard the string. \uXXXX is consumed
+ * correctly but not decoded (none of tag names / asset filenames / URLs
+ * realistically contain non-ASCII escapes). */
+static bool parse_string(json_reader_t *r, char *out, size_t out_size) {
+    if (r->la != '"') {
+        return false;
+    }
+    reader_advance(r);
+    size_t len = 0;
+    while (r->la != '"') {
+        if (r->la < 0) {
+            return false; /* EOF mid-string */
+        }
+        int c = r->la;
+        if (c == '\\') {
+            reader_advance(r);
+            switch (r->la) {
+                case '"': c = '"'; break;
+                case '\\': c = '\\'; break;
+                case '/': c = '/'; break;
+                case 'n': c = '\n'; break;
+                case 't': c = '\t'; break;
+                case 'r': c = '\r'; break;
+                case 'b': c = '\b'; break;
+                case 'f': c = '\f'; break;
+                case 'u':
+                    reader_advance(r);
+                    for (int i = 0; i < 4 && r->la >= 0; i++) {
+                        reader_advance(r);
+                    }
+                    continue; /* already advanced past the whole escape */
+                default:
+                    return false;
+            }
+        }
+        if (out != NULL && len + 1 < out_size) {
+            out[len++] = (char)c;
+        }
+        reader_advance(r);
+    }
+    reader_advance(r); /* closing quote */
+    if (out != NULL) {
+        out[len] = '\0';
+    }
+    return true;
+}
+
+static bool parse_number(json_reader_t *r, uint32_t *out) {
+    char buf[16];
+    size_t len = 0;
+    while (r->la >= 0 && (isdigit(r->la) || r->la == '-' || r->la == '+' || r->la == '.' || r->la == 'e' ||
+                          r->la == 'E')) {
+        if (len + 1 < sizeof(buf)) {
+            buf[len++] = (char)r->la;
+        }
+        reader_advance(r);
+    }
+    buf[len] = '\0';
+    if (len == 0) {
+        return false;
+    }
+    *out = (uint32_t)strtoul(buf, NULL, 10);
+    return true;
+}
+
+/* Generically consumes any JSON value (string/number/bool/null/object/
+ * array) without capturing it -- used for every field this parser doesn't
+ * specifically care about (uploader, timestamps, content_type, ...). */
+static bool skip_value(json_reader_t *r) {
+    skip_ws(r);
+    if (r->la == '"') {
+        return parse_string(r, NULL, 0);
+    }
+    if (r->la == '{') {
+        reader_advance(r);
+        skip_ws(r);
+        if (r->la == '}') {
+            reader_advance(r);
+            return true;
+        }
+        while (true) {
+            skip_ws(r);
+            if (!parse_string(r, NULL, 0)) {
+                return false;
+            }
+            skip_ws(r);
+            if (r->la != ':') {
+                return false;
+            }
+            reader_advance(r);
+            if (!skip_value(r)) {
+                return false;
+            }
+            skip_ws(r);
+            if (r->la == ',') {
+                reader_advance(r);
+                continue;
+            }
+            if (r->la == '}') {
+                reader_advance(r);
+                return true;
+            }
+            return false;
+        }
+    }
+    if (r->la == '[') {
+        reader_advance(r);
+        skip_ws(r);
+        if (r->la == ']') {
+            reader_advance(r);
+            return true;
+        }
+        while (true) {
+            if (!skip_value(r)) {
+                return false;
+            }
+            skip_ws(r);
+            if (r->la == ',') {
+                reader_advance(r);
+                continue;
+            }
+            if (r->la == ']') {
+                reader_advance(r);
+                return true;
+            }
+            return false;
+        }
+    }
+    /* number / true / false / null -- a bare run up to the next structural
+     * character or whitespace. */
+    if (r->la < 0) {
+        return false;
+    }
+    while (r->la >= 0 && r->la != ',' && r->la != '}' && r->la != ']' && r->la != ' ' && r->la != '\t' &&
+           r->la != '\n' && r->la != '\r') {
+        reader_advance(r);
+    }
+    return true;
+}
+
+/* Parses one asset object's fields (reader positioned right after its
+ * opening '{'). */
+static bool parse_asset_fields(json_reader_t *r, net_github_asset_t *out) {
+    memset(out, 0, sizeof(*out));
+    skip_ws(r);
+    if (r->la == '}') {
+        reader_advance(r);
+        return true;
+    }
+    while (true) {
+        skip_ws(r);
+        char key[32];
+        if (!parse_string(r, key, sizeof(key))) {
+            return false;
+        }
+        skip_ws(r);
+        if (r->la != ':') {
+            return false;
+        }
+        reader_advance(r);
+        skip_ws(r);
+
+        if (strcmp(key, "name") == 0) {
+            if (!parse_string(r, out->name, sizeof(out->name))) {
+                return false;
+            }
+        } else if (strcmp(key, "browser_download_url") == 0) {
+            if (!parse_string(r, out->download_url, sizeof(out->download_url))) {
+                return false;
+            }
+        } else if (strcmp(key, "size") == 0) {
+            if (!parse_number(r, &out->size)) {
+                return false;
+            }
+        } else if (!skip_value(r)) {
+            return false;
+        }
+
+        skip_ws(r);
+        if (r->la == ',') {
+            reader_advance(r);
             continue;
         }
-        net_github_asset_t *asset_dst = &dst->assets[dst->asset_count];
-        copy_json_string(a, "name", asset_dst->name, sizeof(asset_dst->name));
-        copy_json_string(a, "browser_download_url", asset_dst->download_url, sizeof(asset_dst->download_url));
-        if (asset_dst->name[0] == '\0' || asset_dst->download_url[0] == '\0') {
+        if (r->la == '}') {
+            reader_advance(r);
+            return true;
+        }
+        return false;
+    }
+}
+
+static bool parse_assets_array(json_reader_t *r, net_github_release_t *dst) {
+    skip_ws(r);
+    if (r->la != '[') {
+        return false;
+    }
+    reader_advance(r);
+    skip_ws(r);
+    if (r->la == ']') {
+        reader_advance(r);
+        return true;
+    }
+    while (true) {
+        skip_ws(r);
+        if (r->la != '{') {
+            return false;
+        }
+        reader_advance(r);
+
+        net_github_asset_t asset;
+        if (!parse_asset_fields(r, &asset)) {
+            return false;
+        }
+        if (asset.name[0] != '\0' && asset.download_url[0] != '\0' &&
+            dst->asset_count < NET_GITHUB_MAX_ASSETS_PER_RELEASE) {
+            dst->assets[dst->asset_count++] = asset;
+        }
+
+        skip_ws(r);
+        if (r->la == ',') {
+            reader_advance(r);
             continue;
         }
-        cJSON *size_item = cJSON_GetObjectItemCaseSensitive(a, "size");
-        asset_dst->size = cJSON_IsNumber(size_item) ? (uint32_t)size_item->valuedouble : 0;
-        dst->asset_count++;
+        if (r->la == ']') {
+            reader_advance(r);
+            return true;
+        }
+        return false;
+    }
+}
+
+/* Top-level release object (reader positioned at the very start of the
+ * response body). */
+static bool parse_release_stream(json_reader_t *r, net_github_release_t *out) {
+    memset(out, 0, sizeof(*out));
+    skip_ws(r);
+    if (r->la != '{') {
+        return false;
+    }
+    reader_advance(r);
+    skip_ws(r);
+    if (r->la == '}') {
+        reader_advance(r);
+        return true; /* empty object -- caller treats an empty tag_name as not-found */
+    }
+    while (true) {
+        skip_ws(r);
+        char key[32];
+        if (!parse_string(r, key, sizeof(key))) {
+            return false;
+        }
+        skip_ws(r);
+        if (r->la != ':') {
+            return false;
+        }
+        reader_advance(r);
+        skip_ws(r);
+
+        if (strcmp(key, "tag_name") == 0) {
+            if (!parse_string(r, out->tag_name, sizeof(out->tag_name))) {
+                return false;
+            }
+        } else if (strcmp(key, "assets") == 0) {
+            if (!parse_assets_array(r, out)) {
+                return false;
+            }
+        } else if (!skip_value(r)) {
+            return false;
+        }
+
+        skip_ws(r);
+        if (r->la == ',') {
+            reader_advance(r);
+            continue;
+        }
+        if (r->la == '}') {
+            reader_advance(r);
+            return true;
+        }
+        return false;
     }
 }
 
@@ -104,28 +415,27 @@ esp_err_t net_github_fetch_release_by_tag(const char *repo, const char *tag, net
     char url[224];
     snprintf(url, sizeof(url), "https://api.github.com/repos/%s/releases/tags/%s", repo, tag);
 
-    char *body = NULL;
-    int body_len = 0;
-    esp_err_t err = net_http_fetch_to_buffer(url, RELEASE_MAX_BYTES, &body, &body_len);
+    esp_http_client_handle_t client;
+    esp_err_t err = net_http_open(url, &client);
     if (err != ESP_OK) {
-        /* Covers the "no release for this tag" case too -- GitHub answers
-         * that with a plain HTTP 404, which net_http_fetch_to_buffer()
-         * already turns into ESP_FAIL via its status-code check. */
-        ESP_LOGE(TAG, "fetch '%s' failed: %s", url, esp_err_to_name(err));
+        /* Covers "no release for this tag" too -- GitHub answers that with
+         * a plain HTTP 404, which net_http_open() already turns into
+         * ESP_FAIL via its status-code check. */
+        ESP_LOGE(TAG, "open '%s' failed: %s", url, esp_err_to_name(err));
         return err;
     }
 
-    cJSON *root = cJSON_ParseWithLength(body, body_len);
-    free(body);
-    if (!cJSON_IsObject(root)) {
-        ESP_LOGE(TAG, "GitHub release-by-tag response for '%s'/'%s' is not a JSON object", repo, tag);
-        cJSON_Delete(root);
+    json_reader_t r;
+    reader_init(&r, client);
+    bool parsed_ok = parse_release_stream(&r, out);
+
+    esp_http_client_close(client);
+    esp_http_client_cleanup(client);
+
+    if (!parsed_ok) {
+        ESP_LOGE(TAG, "streaming parse of release '%s'/'%s' failed", repo, tag);
         return ESP_ERR_INVALID_RESPONSE;
     }
-
-    parse_release_object(root, out);
-    cJSON_Delete(root);
-
     if (out->tag_name[0] == '\0') {
         ESP_LOGE(TAG, "release response for '%s'/'%s' has no tag_name", repo, tag);
         return ESP_ERR_NOT_FOUND;

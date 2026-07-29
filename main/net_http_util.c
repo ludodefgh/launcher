@@ -42,7 +42,7 @@ esp_err_t net_http_open_and_follow_redirects(esp_http_client_handle_t client, in
     return ESP_OK;
 }
 
-esp_err_t net_http_fetch_to_buffer(const char *url, size_t max_bytes, char **out_buf, int *out_len) {
+esp_err_t net_http_open(const char *url, esp_http_client_handle_t *out_client) {
     bool is_https = strncmp(url, "https://", 8) == 0;
     esp_http_client_config_t config = {
         .url = url,
@@ -68,6 +68,17 @@ esp_err_t net_http_fetch_to_buffer(const char *url, size_t max_bytes, char **out
         esp_http_client_close(client);
         esp_http_client_cleanup(client);
         return ESP_FAIL;
+    }
+
+    *out_client = client;
+    return ESP_OK;
+}
+
+esp_err_t net_http_fetch_to_buffer(const char *url, size_t max_bytes, char **out_buf, int *out_len) {
+    esp_http_client_handle_t client;
+    esp_err_t err = net_http_open(url, &client);
+    if (err != ESP_OK) {
+        return err;
     }
 
     /* Catch an oversized response as early as possible when the server told

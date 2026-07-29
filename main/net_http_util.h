@@ -30,6 +30,20 @@ extern "C" {
 esp_err_t net_http_open_and_follow_redirects(esp_http_client_handle_t client, int *out_status);
 
 /*
+ * Inits an esp_http_client for `url` (TLS cert bundle attached automatically
+ * for https://), opens it via net_http_open_and_follow_redirects() above,
+ * and confirms the final status is 200. On ESP_OK, *out_client is open and
+ * positioned to read the body via esp_http_client_read() -- caller owns
+ * esp_http_client_close()/cleanup() once done reading. On error, the client
+ * has already been torn down. Shared connection-setup used both by
+ * net_http_fetch_to_buffer() below (buffers the whole body) and by callers
+ * that stream the body incrementally instead (net_github.c's release fetch,
+ * issue #34 round 2 -- buffering a whole GitHub release's JSON can fail to
+ * even malloc under real-world heap pressure, regardless of buffer size).
+ */
+esp_err_t net_http_open(const char *url, esp_http_client_handle_t *out_client);
+
+/*
  * GETs `url` (following redirects per net_http_open_and_follow_redirects()
  * above) into a malloc'd, NUL-terminated buffer capped at max_bytes.
  * Attaches the ESP-IDF cert bundle for https:// URLs. On ESP_OK, *out_buf is
