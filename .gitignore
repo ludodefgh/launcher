@@ -3,6 +3,13 @@ build/
 sdkconfig
 sdkconfig.old
 
+# IDF Component Manager: both are regenerated from main/idf_component.yml on
+# build. dependencies.lock is not committed -- it is rewritten on every
+# `idf.py set-target` (target-specific), which is just churn for a repo that
+# builds 3 targets in CI; the version spec in idf_component.yml is the pin.
+managed_components/
+dependencies.lock
+
 # Local dev overrides (e.g. real WiFi credentials) -- never commit these
 sdkconfig.local
 

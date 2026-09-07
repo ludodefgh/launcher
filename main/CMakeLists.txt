@@ -5,7 +5,6 @@ set(launcher_srcs
     "boot_logic.c"
     "boot_into.c"
     "ui_menu.c"
-    "display_st7789.c"
 )
 
 # NOTE: REQUIRES/PRIV_REQUIRES cannot reliably be made conditional on
@@ -24,6 +23,7 @@ set(launcher_requires
     esp_partition
     app_update
     esp_lcd
+    esp_lcd_gc9a01
     driver
     esp_timer
     esp_wifi
@@ -36,8 +36,20 @@ set(launcher_requires
     bt
 )
 
+# Exactly one display panel driver; both implement the panel-agnostic
+# display.h API (see the LAUNCHER_DISPLAY_DRIVER Kconfig choice). esp_lcd_gc9a01
+# stays in REQUIRES unconditionally (conditional REQUIRES is unreliable, see
+# CLAUDE.md) -- it is dropped at link when display_gc9a01.c is not compiled.
+if(CONFIG_LAUNCHER_DISPLAY_DRIVER_GC9A01)
+    list(APPEND launcher_srcs "display_gc9a01.c")
+else()
+    list(APPEND launcher_srcs "display_st7789.c")
+endif()
+
 if(CONFIG_LAUNCHER_NAV_DRIVER_MOCK)
     list(APPEND launcher_srcs "nav_input_mock.c")
+elseif(CONFIG_LAUNCHER_NAV_DRIVER_BUTTONS)
+    list(APPEND launcher_srcs "nav_input_buttons.c")
 else()
     list(APPEND launcher_srcs "nav_input_ec11.c")
 endif()

@@ -1,0 +1,11 @@
+## Managed-component dependencies for the launcher's `main` component.
+##
+## The launcher is otherwise dependency-free (ESP-IDF built-ins only). This
+## one entry is the GC9A01 round-IPS SPI panel driver: ESP-IDF's esp_lcd
+## ships st7789 / nt35510 / ssd1306 in-tree but not GC9A01. Only used when
+## CONFIG_LAUNCHER_DISPLAY_DRIVER_GC9A01=y (main/display_gc9a01.c); it is
+## fetched/compiled unconditionally because component requirements can't be
+## Kconfig-gated reliably (see CLAUDE.md), and costs ~0 flash otherwise
+## (dropped at link).
+dependencies:
+  espressif/esp_lcd_gc9a01: "^2.0.0"
