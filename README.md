@@ -102,7 +102,9 @@ instead of rebuilding the launcher first.
 main/                   launcher firmware (see file headers for each module's role)
 components/launcher_client/   tiny library for guest apps ("return to menu")
 partitions.csv          8MB flash layout (S3 dev boards), 3 app slots
-partitions_4mb.csv       4MB flash layout (C3 / classic WROOM), 2 app slots
+partitions_4mb.csv       4MB flash layout (C3 / classic WROOM), 2 app slots, 640KB factory
+partitions_4mb_net.csv   4MB layout with a 1.375MB factory for network builds (see "Flash size tradeoff")
+sdkconfig.4mb_net.defaults   size/memory relief the 4MB classic ESP32 needs for a network build
 test/test_boot_logic.c  host-based unit tests for the pure boot-decision logic
 tools/merge_with_guest.py   combine the launcher with a separately-built guest .bin, see below
 .devcontainer/          build-only ESP-IDF 5.5 container, see below
@@ -545,12 +547,18 @@ self-contained reference to every endpoint/characteristic below (exact
 UUIDs, payload formats, error behavior) — written for implementing a
 client (e.g. EspOTG) against this API without reading the source.
 
-Either transport calls the exact same `boot_into()` used by the local menu
+Each transport calls the exact same `boot_into()` used by the local menu
 for booting — network is just another event source, per spec. Beyond
 booting, both transports now also cover writing a new binary into a slot
 remotely (issues #32/#33), superseding the original spec's "boot-only"
 scope now that a concrete need (a phone-based companion app, EspOTG) showed
 up.
+
+`CONFIG_LAUNCHER_NET_REMOTE_TRANSPORT_HTTP` and `..._BLE` are **independent
+options — enable both** and you get the full flow: BLE bootstraps WiFi
+credentials onto a fresh device (no WiFi needed for BLE), then HTTP's
+`/upload` pushes a raw `.bin` (BLE has no binary-transfer equivalent —
+payload-bounded). BLE is started first on boot, then HTTP.
 
 - **HTTP** (`main/net_remote_http.c`): `esp_http_server` on port 80.
   - `GET /` lists slots with a boot button (and a PIN field if configured).
@@ -605,14 +613,11 @@ up.
   OTA-update and WiFi-write characteristics above are each gated on the
   Kconfig option for the feature they depend on.
 
-  **Manual menuconfig step required**: Kconfig's `select` cannot force a
-  specific member of a `choice` block (a real Kconfig limitation — see
-  "Design decisions" below), so picking this transport does *not*
-  automatically switch the Bluetooth host stack to NimBLE. After enabling
-  it, also go to `Component config > Bluetooth > Host` and pick "NimBLE -
-  BLE only" yourself (Bluedroid, the default, is a different, incompatible
-  API). On classic ESP32 also set `Component config > Bluetooth >
-  Controller > Mode` to "BLE Only".
+  **Bluetooth host**: `net_remote_ble.c` needs NimBLE, not the default
+  Bluedroid, and Kconfig's `select` can't pick a host — so set
+  `Component config > Bluetooth > Host` = "NimBLE - BLE only" (and, on
+  classic ESP32, `Controller > Mode` = "BLE Only"). On a 4MB classic ESP32
+  `sdkconfig.4mb_net.defaults` already does this (see "Flash size tradeoff").
 
 ### Security
 
@@ -631,12 +636,26 @@ sizing comments at the top of `partitions.csv` / `partitions_4mb.csv`.
 `partitions.csv`'s `factory` partition is sized 1.5MB specifically to fit
 all of these at once; `partitions_4mb.csv` was deliberately left smaller
 (640KB) since a 4MB module doesn't have the budget to grow factory without
-seriously cutting into app slot space — see that file's comment for
-concrete measured sizes and guidance. **`idf.py build`'s partition-size
-overflow check is a warning, not a build failure** — `esptool` has no
-concept of partition boundaries and will happily flash straight into the
-next partition, corrupting it silently. Never flash after seeing that
-warning.
+seriously cutting into app slot space.
+
+**Network on a 4MB classic ESP32** (WROOM): use `partitions_4mb_net.csv`
+(factory 1.375MB + two ~1.2–1.3MB slots) *and* layer
+`sdkconfig.4mb_net.defaults` into `SDKCONFIG_DEFAULTS` — it carries the
+size/memory relief the classic ESP32 needs once NimBLE + WiFi +
+`esp_http_server` are in (without it the link fails, `iram0_0_seg
+overflowed`, and the 2nd-stage bootloader runs out of its 28KB partition).
+Measured against `idf:release-v5.5`, esp32 target: **remote control over
+BLE + HTTP (`/upload`, no manifest OTA) ≈ 1.0MB**; adding
+`CONFIG_LAUNCHER_NET_OTA_ENABLE` (GitHub/HTTPS manifest pull) ≈ 1.12MB and
+noticeably more runtime heap (mbedtls TLS) — skip it on 4MB unless you need
+the release-pull flow, `/upload` covers a direct push. Runtime heap with
+BLE + WiFi + an upload in flight is tight (~150–200KB free) but bounded to
+the launcher's own menu — a guest app running has the full RAM.
+
+**`idf.py build`'s partition-size overflow check is a warning, not a build
+failure** — `esptool` has no concept of partition boundaries and will
+happily flash straight into the next partition, corrupting it silently.
+Never flash after seeing that warning.
 
 ## Out of scope for this iteration
 
