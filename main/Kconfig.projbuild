@@ -149,30 +149,33 @@ menu "Bootloader Launcher Configuration"
             int "Backlight GPIO (-1 if not GPIO-driven)"
             default 7
 
+        # ST7789 only: display_gc9a01.c hardcodes 240x240 and never swaps
+        # (it's a fixed square panel), so a layered/appended sdkconfig can't
+        # leave a stale 320 behind.
         config LAUNCHER_DISPLAY_WIDTH
             int "Screen width (px)"
-            default 240 if LAUNCHER_DISPLAY_DRIVER_GC9A01
+            depends on LAUNCHER_DISPLAY_DRIVER_ST7789
             default 320
 
         config LAUNCHER_DISPLAY_HEIGHT
             int "Screen height (px)"
+            depends on LAUNCHER_DISPLAY_DRIVER_ST7789
             default 240
 
         config LAUNCHER_DISPLAY_SWAP_XY
             bool "Swap rows/columns (swap_xy)"
-            default n if LAUNCHER_DISPLAY_DRIVER_GC9A01
+            depends on LAUNCHER_DISPLAY_DRIVER_ST7789
             default y
             help
                 Most 2.4" ST7789 modules of this type are natively portrait
                 (240x320) -- this swap is needed to get a correct landscape
                 (320x240) image. Equivalent to TFT_eSPI's setRotation(). If the
                 menu appears rotated 90 degrees, try toggling this option.
-                Not needed for a square 240x240 GC9A01 (default n there).
 
         config LAUNCHER_DISPLAY_MIRROR_X
             bool "Horizontal mirror"
-            default n if LAUNCHER_DISPLAY_DRIVER_GC9A01
-            default y
+            default y if LAUNCHER_DISPLAY_DRIVER_ST7789
+            default n
             help
                 Adjust case by case depending on the panel's physical mounting.
                 default y confirmed on this project's reference hardware

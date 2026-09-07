@@ -36,16 +36,16 @@
 static const char *TAG = "display";
 
 #define DISPLAY_SPI_HOST   SPI2_HOST
-#define DISPLAY_WIDTH      CONFIG_LAUNCHER_DISPLAY_WIDTH
-#define DISPLAY_HEIGHT     CONFIG_LAUNCHER_DISPLAY_HEIGHT
+
+/* The GC9A01 is a fixed 240x240 square panel -- hardcoded, not from
+ * CONFIG_LAUNCHER_DISPLAY_WIDTH/HEIGHT (those are ST7789-only). No swap_xy
+ * either (square). Only mirror is board-dependent and stays configurable. */
+#define DISPLAY_WIDTH      240
+#define DISPLAY_HEIGHT     240
 
 /* Kconfig only emits a #define for a bool option when it is "y"; when "n"
- * the symbol is absent entirely (not defined as 0). These are read as plain
- * C expressions below (panel swap/mirror args), so provide 0 fallbacks. See
- * CLAUDE.md gotchas and the identical block in display_st7789.c. */
-#ifndef CONFIG_LAUNCHER_DISPLAY_SWAP_XY
-#define CONFIG_LAUNCHER_DISPLAY_SWAP_XY 0
-#endif
+ * the symbol is absent entirely (not defined as 0). MIRROR_* are read as
+ * plain C expressions below, so provide 0 fallbacks. See CLAUDE.md gotchas. */
 #ifndef CONFIG_LAUNCHER_DISPLAY_MIRROR_X
 #define CONFIG_LAUNCHER_DISPLAY_MIRROR_X 0
 #endif
@@ -133,10 +133,8 @@ esp_err_t display_init(void) {
     ESP_ERROR_CHECK(esp_lcd_panel_init(s_panel));
     /* GC9A01 panels are IPS -- colour is inverted, same as the ST7789 IPS modules. */
     ESP_ERROR_CHECK(esp_lcd_panel_invert_color(s_panel, true));
-    /* 240x240 square panel: no swap_xy needed by default (unlike the 2.4"
-     * portrait ST7789). mirror_x/y depend on the specific module's scan
-     * direction/mounting -- adjust via menuconfig if the image is flipped. */
-    ESP_ERROR_CHECK(esp_lcd_panel_swap_xy(s_panel, CONFIG_LAUNCHER_DISPLAY_SWAP_XY));
+    /* Square panel: no swap_xy. mirror_x/y depend on the module's scan
+     * direction / mounting -- adjust via menuconfig if the image is flipped. */
     ESP_ERROR_CHECK(esp_lcd_panel_mirror(s_panel, CONFIG_LAUNCHER_DISPLAY_MIRROR_X, CONFIG_LAUNCHER_DISPLAY_MIRROR_Y));
     ESP_ERROR_CHECK(esp_lcd_panel_disp_on_off(s_panel, true));
 

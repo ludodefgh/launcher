@@ -39,9 +39,15 @@ static const gpio_num_t s_pins[BTN_COUNT] = {
     CONFIG_LAUNCHER_BUTTONS_GPIO_SELECT,
 };
 
-#define POLL_MS          5
-#define DEBOUNCE_SAMPLES 3       /* level stable for 3 * 5 ms = 15 ms */
+#define POLL_MS          10
+#define DEBOUNCE_SAMPLES 2       /* level stable for 2 poll periods (~20 ms at a 100 Hz tick) */
 #define LONG_PRESS_MS    CONFIG_LAUNCHER_LONG_PRESS_MS
+
+/* pdMS_TO_TICKS(POLL_MS) rounds to 0 when POLL_MS < the tick period (10 ms at
+ * the default CONFIG_FREERTOS_HZ=100), and vTaskDelay(0) does NOT yield to
+ * equal/lower-priority tasks -- the poll task would then spin and starve
+ * main_task -> interrupt watchdog. Clamp to at least one tick. */
+#define POLL_TICKS       (pdMS_TO_TICKS(POLL_MS) > 0 ? pdMS_TO_TICKS(POLL_MS) : 1)
 
 typedef struct {
     uint8_t stable;         /* debounced level: 1 = released, 0 = pressed */
@@ -105,7 +111,7 @@ static void poll_task(void *arg) {
             emit(NAV_EVENT_LONG_PRESS);
         }
 
-        vTaskDelay(pdMS_TO_TICKS(POLL_MS));
+        vTaskDelay(POLL_TICKS);
     }
 }
 
