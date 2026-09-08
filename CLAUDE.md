@@ -46,6 +46,10 @@ again).
   Kconfig) and the partition CSV choice are allowed to be board-specific. CI builds `esp32s3`, `esp32c3`,
   `esp32` on every push specifically to catch accidental non-portability
   (e.g. a second-core-pinned FreeRTOS task, an implicit BLE dependency).
+  Note CI only builds the **default** sdkconfig (ST7789 + EC11, no network):
+  the GC9A01 / buttons / `net_*` / `4mb_net` combinations are not compiled
+  in CI yet, so a green check is not proof those paths build — verify them
+  with the Docker command below when touching them.
 - **License: MIT.** Keep `LICENSE` and any new file headers consistent
   with that.
 

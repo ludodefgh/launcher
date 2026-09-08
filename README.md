@@ -252,22 +252,26 @@ reusing/extending this repo:
   ~130 lines of panel-agnostic fill/glyph code, but keeping the tested
   ST7789 path byte-for-byte untouched was worth the duplication for a first
   pass; a later refactor can extract the common part once a third panel
-  makes the pattern pay off. CI builds both (`esp32s3` = ST7789 default,
-  `esp32` = GC9A01) so they can't silently drift.
+  makes the pattern pay off. CI builds the ST7789 default on all three
+  targets; the GC9A01 + buttons combo is verified against
+  `idf:release-v5.5` locally, not yet in the CI matrix (tracked as a
+  follow-up).
 - **`esp_lcd_gc9a01` (managed component) is the launcher's first non-built-in
   dependency.** ESP-IDF's `esp_lcd` ships ST7789/NT35510/SSD1306 in-tree but
   not GC9A01, and hand-vendoring the ~40-command init table is more
   transcription risk than value. It is declared unconditionally in
   `main/idf_component.yml` + `REQUIRES` (Kconfig-gated component requirements
   are unreliable, see below) and dropped at link when `display_gc9a01.c`
-  isn't compiled. `managed_components/` is gitignored; `dependencies.lock`
-  is committed.
-- **The push-button nav driver (`nav_input_buttons.c`) polls at 5 ms rather
-  than using a GPIO ISR** like `nav_input_ec11.c`. A menu has no latency
-  requirement, a bare jumper-wire-to-GND (the expected bring-up input)
-  bounces heavily, and polling keeps the driver off the shared GPIO ISR
-  service. SELECT doubles as the bootloader factory-reset pin, same as the
-  EC11 SW pin.
+  isn't compiled. Both `managed_components/` and `dependencies.lock` are
+  gitignored — the lock is target-specific and rewritten on every `idf.py
+  set-target`, so it is churn for a 3-target CI repo; the `^2.0.0` spec in
+  `main/idf_component.yml` is the pin.
+- **The push-button nav driver (`nav_input_buttons.c`) polls every 10 ms
+  (clamped to at least one RTOS tick) rather than using a GPIO ISR** like
+  `nav_input_ec11.c`. A menu has no latency requirement, a bare
+  jumper-wire-to-GND (the expected bring-up input) bounces heavily, and
+  polling keeps the driver off the shared GPIO ISR service. SELECT doubles
+  as the bootloader factory-reset pin, same as the EC11 SW pin.
 - Kconfig bool options only get a `#define` in `sdkconfig.h` when set to
   `y` (ESP-IDF/Kconfig behavior, not a bug) — code that reads a bool config
   as a plain C expression (not inside `#if`) needs an explicit
