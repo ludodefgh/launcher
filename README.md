@@ -102,7 +102,9 @@ instead of rebuilding the launcher first.
 main/                   launcher firmware (see file headers for each module's role)
 components/launcher_client/   tiny library for guest apps ("return to menu")
 partitions.csv          8MB flash layout (S3 dev boards), 3 app slots
-partitions_4mb.csv       4MB flash layout (C3 / classic WROOM), 2 app slots
+partitions_4mb.csv       4MB flash layout (C3 / classic WROOM), 2 app slots, 640KB factory
+partitions_4mb_net.csv   4MB layout with a 1.375MB factory for network builds (see "Flash size tradeoff")
+sdkconfig.4mb_net.defaults   size/memory relief the 4MB classic ESP32 needs for a network build
 test/test_boot_logic.c  host-based unit tests for the pure boot-decision logic
 tools/merge_with_guest.py   combine the launcher with a separately-built guest .bin, see below
 .devcontainer/          build-only ESP-IDF 5.5 container, see below
@@ -152,14 +154,50 @@ builds it for `esp32s3`, `esp32c3`, and `esp32` (classic WROOM) on every
 push. What does vary per board/chip:
 - **Flash size / partition table**: use `partitions.csv` (8MB, 3 slots) or
   `partitions_4mb.csv` (4MB, 2 slots) depending on your module.
-- **Screen/encoder pin mapping**: set via `idf.py menuconfig` →
+- **Display panel**: `LAUNCHER_DISPLAY_DRIVER` chooses **ST7789** (default,
+  e.g. a 2.4" 320×240 SPI module) or **GC9A01** (1.28" 240×240 round IPS).
+  Both implement the same panel-agnostic `display.h` API; only
+  `main/display_{st7789,gc9a01}.c` differ. GC9A01 pulls the
+  `espressif/esp_lcd_gc9a01` managed component (ESP-IDF's `esp_lcd` has no
+  built-in GC9A01 driver).
+- **Navigation input**: `LAUNCHER_NAV_DRIVER` chooses **EC11** rotary
+  encoder (default), **buttons** (3× momentary GPIO to GND: up / down /
+  select — for boards with no encoder), or **mock** (serial console).
+- **Screen / encoder / button pin mapping**: set via `idf.py menuconfig` →
   "Bootloader Launcher Configuration" (`CONFIG_LAUNCHER_DISPLAY_GPIO_*`,
-  `CONFIG_LAUNCHER_EC11_GPIO_*`) — always board-specific, not a portability
-  issue in itself.
+  `CONFIG_LAUNCHER_EC11_GPIO_*`, `CONFIG_LAUNCHER_BUTTONS_GPIO_*`) — always
+  board-specific, not a portability issue in itself. If you move the EC11
+  SW / buttons SELECT pin, keep `CONFIG_BOOTLOADER_NUM_PIN_FACTORY_RESET`
+  in `sdkconfig.defaults` in sync (crash-loop recovery, see below).
 - **BLE remote control on ESP32-S2**: the S2 has no Bluetooth. The BLE
   transport choice for `LAUNCHER_NET_REMOTE_CONTROL_ENABLE` is gated behind
   `depends on SOC_BLE_SUPPORTED` in Kconfig, so it's simply unavailable
   there (use the HTTP transport instead).
+
+### Example: round GC9A01 + 3 buttons on a classic ESP32-WROOM (4MB)
+
+`idf.py set-target esp32` then, in `menuconfig` (or appended to `sdkconfig`):
+
+```
+CONFIG_LAUNCHER_DISPLAY_DRIVER_GC9A01=y
+CONFIG_LAUNCHER_NAV_DRIVER_BUTTONS=y
+CONFIG_LAUNCHER_DISPLAY_GPIO_SCLK=18
+CONFIG_LAUNCHER_DISPLAY_GPIO_MOSI=23
+CONFIG_LAUNCHER_DISPLAY_GPIO_DC=4
+CONFIG_LAUNCHER_DISPLAY_GPIO_CS=17
+CONFIG_LAUNCHER_DISPLAY_GPIO_RST=16
+CONFIG_LAUNCHER_DISPLAY_GPIO_BL=-1     # backlight hard-wired to 3V3
+CONFIG_LAUNCHER_BUTTONS_GPIO_UP=19
+CONFIG_LAUNCHER_BUTTONS_GPIO_DOWN=14
+CONFIG_LAUNCHER_BUTTONS_GPIO_SELECT=13
+CONFIG_BOOTLOADER_NUM_PIN_FACTORY_RESET=13   # = buttons SELECT
+```
+
+The menu UI (`ui_menu.c`) is laid out for a landscape rectangle; on a round
+240×240 the circular bezel clips roughly the outer ~20 px, so the title and
+first menu row sit near the edge — usable as-is, but making the layout
+round-aware (a `LAUNCHER_DISPLAY_ROUND` bool nudging the margins in) is an
+open follow-up.
 
 ## Reusing this launcher in a new project
 
@@ -209,6 +247,31 @@ reusing/extending this repo:
   (native IDF component, ST7789 support is built into ESP-IDF core) rather
   than `TFT_eSPI`, to avoid an Arduino-compatibility-layer dependency in a
   pure ESP-IDF project.
+- **GC9A01 support is a sibling file (`display_gc9a01.c`), not a refactor of
+  `display_st7789.c` into shared-drawing + thin-panel files.** The two share
+  ~130 lines of panel-agnostic fill/glyph code, but keeping the tested
+  ST7789 path byte-for-byte untouched was worth the duplication for a first
+  pass; a later refactor can extract the common part once a third panel
+  makes the pattern pay off. CI builds the ST7789 default on all three
+  targets; the GC9A01 + buttons combo is verified against
+  `idf:release-v5.5` locally, not yet in the CI matrix (tracked as a
+  follow-up).
+- **`esp_lcd_gc9a01` (managed component) is the launcher's first non-built-in
+  dependency.** ESP-IDF's `esp_lcd` ships ST7789/NT35510/SSD1306 in-tree but
+  not GC9A01, and hand-vendoring the ~40-command init table is more
+  transcription risk than value. It is declared unconditionally in
+  `main/idf_component.yml` + `REQUIRES` (Kconfig-gated component requirements
+  are unreliable, see below) and dropped at link when `display_gc9a01.c`
+  isn't compiled. Both `managed_components/` and `dependencies.lock` are
+  gitignored — the lock is target-specific and rewritten on every `idf.py
+  set-target`, so it is churn for a 3-target CI repo; the `^2.0.0` spec in
+  `main/idf_component.yml` is the pin.
+- **The push-button nav driver (`nav_input_buttons.c`) polls every 10 ms
+  (clamped to at least one RTOS tick) rather than using a GPIO ISR** like
+  `nav_input_ec11.c`. A menu has no latency requirement, a bare
+  jumper-wire-to-GND (the expected bring-up input) bounces heavily, and
+  polling keeps the driver off the shared GPIO ISR service. SELECT doubles
+  as the bootloader factory-reset pin, same as the EC11 SW pin.
 - Kconfig bool options only get a `#define` in `sdkconfig.h` when set to
   `y` (ESP-IDF/Kconfig behavior, not a bug) — code that reads a bool config
   as a plain C expression (not inside `#if`) needs an explicit
@@ -488,12 +551,18 @@ self-contained reference to every endpoint/characteristic below (exact
 UUIDs, payload formats, error behavior) — written for implementing a
 client (e.g. EspOTG) against this API without reading the source.
 
-Either transport calls the exact same `boot_into()` used by the local menu
+Each transport calls the exact same `boot_into()` used by the local menu
 for booting — network is just another event source, per spec. Beyond
 booting, both transports now also cover writing a new binary into a slot
 remotely (issues #32/#33), superseding the original spec's "boot-only"
 scope now that a concrete need (a phone-based companion app, EspOTG) showed
 up.
+
+`CONFIG_LAUNCHER_NET_REMOTE_TRANSPORT_HTTP` and `..._BLE` are **independent
+options — enable both** and you get the full flow: BLE bootstraps WiFi
+credentials onto a fresh device (no WiFi needed for BLE), then HTTP's
+`/upload` pushes a raw `.bin` (BLE has no binary-transfer equivalent —
+payload-bounded). BLE is started first on boot, then HTTP.
 
 - **HTTP** (`main/net_remote_http.c`): `esp_http_server` on port 80.
   - `GET /` lists slots with a boot button (and a PIN field if configured).
@@ -551,14 +620,11 @@ up.
   OTA-update and WiFi-write characteristics above are each gated on the
   Kconfig option for the feature they depend on.
 
-  **Manual menuconfig step required**: Kconfig's `select` cannot force a
-  specific member of a `choice` block (a real Kconfig limitation — see
-  "Design decisions" below), so picking this transport does *not*
-  automatically switch the Bluetooth host stack to NimBLE. After enabling
-  it, also go to `Component config > Bluetooth > Host` and pick "NimBLE -
-  BLE only" yourself (Bluedroid, the default, is a different, incompatible
-  API). On classic ESP32 also set `Component config > Bluetooth >
-  Controller > Mode` to "BLE Only".
+  **Bluetooth host**: `net_remote_ble.c` needs NimBLE, not the default
+  Bluedroid, and Kconfig's `select` can't pick a host — so set
+  `Component config > Bluetooth > Host` = "NimBLE - BLE only" (and, on
+  classic ESP32, `Controller > Mode` = "BLE Only"). On a 4MB classic ESP32
+  `sdkconfig.4mb_net.defaults` already does this (see "Flash size tradeoff").
 
 ### Security
 
@@ -577,12 +643,26 @@ sizing comments at the top of `partitions.csv` / `partitions_4mb.csv`.
 `partitions.csv`'s `factory` partition is sized 1.5MB specifically to fit
 all of these at once; `partitions_4mb.csv` was deliberately left smaller
 (640KB) since a 4MB module doesn't have the budget to grow factory without
-seriously cutting into app slot space — see that file's comment for
-concrete measured sizes and guidance. **`idf.py build`'s partition-size
-overflow check is a warning, not a build failure** — `esptool` has no
-concept of partition boundaries and will happily flash straight into the
-next partition, corrupting it silently. Never flash after seeing that
-warning.
+seriously cutting into app slot space.
+
+**Network on a 4MB classic ESP32** (WROOM): use `partitions_4mb_net.csv`
+(factory 1.375MB + two ~1.2–1.3MB slots) *and* layer
+`sdkconfig.4mb_net.defaults` into `SDKCONFIG_DEFAULTS` — it carries the
+size/memory relief the classic ESP32 needs once NimBLE + WiFi +
+`esp_http_server` are in (without it the link fails, `iram0_0_seg
+overflowed`, and the 2nd-stage bootloader runs out of its 28KB partition).
+Measured against `idf:release-v5.5`, esp32 target: **remote control over
+BLE + HTTP (`/upload`, no manifest OTA) ≈ 1.0MB**; adding
+`CONFIG_LAUNCHER_NET_OTA_ENABLE` (GitHub/HTTPS manifest pull) ≈ 1.12MB and
+noticeably more runtime heap (mbedtls TLS) — skip it on 4MB unless you need
+the release-pull flow, `/upload` covers a direct push. Runtime heap with
+BLE + WiFi + an upload in flight is tight (~150–200KB free) but bounded to
+the launcher's own menu — a guest app running has the full RAM.
+
+**`idf.py build`'s partition-size overflow check is a warning, not a build
+failure** — `esptool` has no concept of partition boundaries and will
+happily flash straight into the next partition, corrupting it silently.
+Never flash after seeing that warning.
 
 ## Out of scope for this iteration
 

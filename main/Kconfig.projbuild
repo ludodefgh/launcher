@@ -35,6 +35,15 @@ menu "Bootloader Launcher Configuration"
             config LAUNCHER_NAV_DRIVER_EC11
                 bool "EC11 rotary encoder"
 
+            config LAUNCHER_NAV_DRIVER_BUTTONS
+                bool "Push buttons (3x GPIO: up / down / select)"
+                help
+                    Three momentary buttons to GND (internal pull-ups, active
+                    low) for boards with no rotary encoder -- a jumper wire to
+                    GND works during bring-up. SELECT: short = select, long =
+                    back/cancel, and also serves as the boot-time
+                    crash-loop-recovery pin (see LAUNCHER_BUTTONS_GPIO_SELECT).
+
             config LAUNCHER_NAV_DRIVER_MOCK
                 bool "Mock (events simulated from the serial console)"
                 help
@@ -67,13 +76,54 @@ menu "Bootloader Launcher Configuration"
             depends on LAUNCHER_NAV_DRIVER_EC11
             default n
 
+        config LAUNCHER_BUTTONS_GPIO_UP
+            int "Button GPIO - UP"
+            depends on LAUNCHER_NAV_DRIVER_BUTTONS
+            default 19
+
+        config LAUNCHER_BUTTONS_GPIO_DOWN
+            int "Button GPIO - DOWN"
+            depends on LAUNCHER_NAV_DRIVER_BUTTONS
+            default 14
+
+        config LAUNCHER_BUTTONS_GPIO_SELECT
+            int "Button GPIO - SELECT"
+            depends on LAUNCHER_NAV_DRIVER_BUTTONS
+            default 13
+            help
+                Also the crash-loop-recovery pin: hold to GND for
+                CONFIG_BOOTLOADER_HOLD_TIME_GPIO seconds at power-on to force
+                the menu even against a guest that crashes immediately. Keep
+                CONFIG_BOOTLOADER_NUM_PIN_FACTORY_RESET in sdkconfig.defaults
+                in sync with this value (same caveat as LAUNCHER_EC11_GPIO_SW).
+
         config LAUNCHER_LONG_PRESS_MS
             int "Long-press threshold (ms)"
             default 3000
+            help
+                Shared by the EC11 and the push-button nav drivers.
 
     endmenu
 
-    menu "Display (TFT ST7789, SPI)"
+    menu "Display (SPI TFT: ST7789 / GC9A01)"
+
+        choice LAUNCHER_DISPLAY_DRIVER
+            prompt "Panel driver"
+            default LAUNCHER_DISPLAY_DRIVER_ST7789
+            help
+                Which esp_lcd panel driver is compiled in (see display.h --
+                the launcher core only ever calls the panel-agnostic
+                display_* API). One at a time, chosen at build.
+
+            config LAUNCHER_DISPLAY_DRIVER_ST7789
+                bool "ST7789 (e.g. 2.4in 320x240 SPI)"
+
+            config LAUNCHER_DISPLAY_DRIVER_GC9A01
+                bool "GC9A01 (1.28in 240x240 round IPS)"
+                help
+                    Pulls the espressif/esp_lcd_gc9a01 managed component
+                    (ESP-IDF's esp_lcd has no built-in GC9A01 driver).
+        endchoice
 
         config LAUNCHER_DISPLAY_GPIO_MOSI
             int "SPI MOSI GPIO"
@@ -99,16 +149,22 @@ menu "Bootloader Launcher Configuration"
             int "Backlight GPIO (-1 if not GPIO-driven)"
             default 7
 
+        # ST7789 only: display_gc9a01.c hardcodes 240x240 and never swaps
+        # (it's a fixed square panel), so a layered/appended sdkconfig can't
+        # leave a stale 320 behind.
         config LAUNCHER_DISPLAY_WIDTH
             int "Screen width (px)"
+            depends on LAUNCHER_DISPLAY_DRIVER_ST7789
             default 320
 
         config LAUNCHER_DISPLAY_HEIGHT
             int "Screen height (px)"
+            depends on LAUNCHER_DISPLAY_DRIVER_ST7789
             default 240
 
         config LAUNCHER_DISPLAY_SWAP_XY
             bool "Swap rows/columns (swap_xy)"
+            depends on LAUNCHER_DISPLAY_DRIVER_ST7789
             default y
             help
                 Most 2.4" ST7789 modules of this type are natively portrait
@@ -118,7 +174,8 @@ menu "Bootloader Launcher Configuration"
 
         config LAUNCHER_DISPLAY_MIRROR_X
             bool "Horizontal mirror"
-            default y
+            default y if LAUNCHER_DISPLAY_DRIVER_ST7789
+            default n
             help
                 Adjust case by case depending on the panel's physical mounting.
                 default y confirmed on this project's reference hardware
@@ -178,33 +235,40 @@ menu "Bootloader Launcher Configuration"
                 Allows triggering boot_into() from a network transport (embedded
                 HTTP server or BLE) in addition to the local navigation HAL.
 
-        choice LAUNCHER_NET_REMOTE_TRANSPORT
-            prompt "Transport for remote control"
+        # Independent bools, not a choice: HTTP and BLE can both be on. BLE
+        # provisions WiFi credentials + boots slots with no WiFi needed; HTTP
+        # adds /upload (raw .bin push into a slot), which BLE has no
+        # equivalent for. Enabling both gives the full "bootstrap over BLE,
+        # push binaries over HTTP" flow -- see docs/espotg-integration.md.
+        config LAUNCHER_NET_REMOTE_TRANSPORT_HTTP
+            bool "Remote control over HTTP (esp_http_server)"
             depends on LAUNCHER_NET_REMOTE_CONTROL_ENABLE
-            default LAUNCHER_NET_REMOTE_TRANSPORT_HTTP
+            default y
+            select LAUNCHER_NET_WIFI_ENABLE
+            help
+                /boot, /wifi, and /upload (a raw .bin straight into an app
+                slot). Needs WiFi already connected. Safe to enable together
+                with the BLE transport below.
 
-            config LAUNCHER_NET_REMOTE_TRANSPORT_HTTP
-                bool "HTTP server (esp_http_server)"
-                select LAUNCHER_NET_WIFI_ENABLE
+        config LAUNCHER_NET_REMOTE_TRANSPORT_BLE
+            bool "Remote control over BLE (NimBLE GATT)"
+            depends on LAUNCHER_NET_REMOTE_CONTROL_ENABLE && SOC_BLE_SUPPORTED
+            select BT_ENABLED
+            default n
+            help
+                NimBLE GATT peripheral: slot list, boot, WiFi-credential
+                provisioning, and (with OTA enabled) a manifest-OTA trigger.
+                Works with no WiFi connection -- the only transport that can
+                bootstrap credentials onto a fresh device. No raw-binary push
+                over BLE (payload-bounded); pair it with the HTTP transport's
+                /upload for that.
 
-            config LAUNCHER_NET_REMOTE_TRANSPORT_BLE
-                bool "BLE (custom GATT service)"
-                depends on SOC_BLE_SUPPORTED
-                select BT_ENABLED
-                help
-                    Does not require CONFIG_LAUNCHER_NET_WIFI_ENABLE -- BLE works
-                    independently of the WiFi station connection.
-
-                    IMPORTANT: Kconfig's "select" cannot force a specific member
-                    of a choice (a Kconfig limitation, not a bug here -- see
-                    README.md). After picking this transport you must also go to
-                    "Component config > Bluetooth > Host" and select "NimBLE -
-                    BLE only" yourself (Bluedroid, the default, is a different
-                    API and net_remote_ble.c will not build against it). On
-                    classic ESP32 also set "Component config > Bluetooth >
-                    Controller > Mode" to "BLE Only" to avoid pulling in unused
-                    BR/EDR support.
-        endchoice
+                IMPORTANT: Kconfig's "select" cannot pick a Bluetooth host, so
+                after enabling this also set "Component config > Bluetooth >
+                Host" to "NimBLE - BLE only" yourself (Bluedroid, the default,
+                is a different API and net_remote_ble.c will not build against
+                it). On classic ESP32 also set "Component config > Bluetooth >
+                Controller > Mode" to "BLE Only".
 
         config LAUNCHER_NET_REMOTE_PIN
             string "PIN/token for remote control (optional)"

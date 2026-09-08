@@ -6,8 +6,8 @@ Context for any Claude Code session (new or resumed) working on this repo.
 
 `launcher`: a multi-program launcher/bootloader for ESP32 (S3, C3, classic
 WROOM). Flashes 3-4 independent firmwares into fixed OTA partitions and lets
-the user pick which one boots, via a TFT + rotary-encoder menu, without
-reflashing. No SD card / dynamic loading in this iteration — see README.md
+the user pick which one boots, via a SPI TFT (ST7789 or GC9A01) + a nav
+input (EC11 rotary encoder or 3 push buttons) menu, without reflashing. No SD card / dynamic loading in this iteration — see README.md
 "Out of scope". Independent of the `ASCII-Aquarium` repo (a guest app that
 consumes this launcher, not the other way around). Optional network features
 (OTA download, remote control over HTTP/BLE, version check) are implemented
@@ -40,11 +40,16 @@ again).
   disabled/unavailable — WiFi failures degrade to "network features
   inactive this cycle," never a hang or crash. See `main/Kconfig.projbuild`.
 - **The launcher core (`boot_logic.c`, `nvs_state.c`, `nav_input.h` HAL,
-  Kconfig) must stay chip-agnostic.** Only pin mapping (`main/display_st7789.c`,
-  `main/nav_input_ec11.c` GPIO numbers, via Kconfig) and the partition CSV
-  choice are allowed to be board-specific. CI builds `esp32s3`, `esp32c3`,
+  Kconfig) must stay chip-agnostic.** Only the panel/nav driver
+  implementations (`main/display_{st7789,gc9a01}.c`,
+  `main/nav_input_{ec11,buttons}.c` — GPIO numbers / panel init, via
+  Kconfig) and the partition CSV choice are allowed to be board-specific. CI builds `esp32s3`, `esp32c3`,
   `esp32` on every push specifically to catch accidental non-portability
   (e.g. a second-core-pinned FreeRTOS task, an implicit BLE dependency).
+  Note CI only builds the **default** sdkconfig (ST7789 + EC11, no network):
+  the GC9A01 / buttons / `net_*` / `4mb_net` combinations are not compiled
+  in CI yet, so a green check is not proof those paths build — verify them
+  with the Docker command below when touching them.
 - **License: MIT.** Keep `LICENSE` and any new file headers consistent
   with that.
 
