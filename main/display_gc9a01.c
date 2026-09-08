@@ -1,17 +1,24 @@
 /*
- * Minimal ST7789 SPI display driver: no full framebuffer (would cost
- * ~150KB for a 320x240 RGB565 panel, too much for RAM-constrained chips
- * like the C3) -- fill/text primitives stream directly to the panel via
- * esp_lcd_panel_draw_bitmap() instead, batched in chunks of FILL_CHUNK_ROWS
- * rows (fill_area) or a whole glyph cell at a time (draw_glyph) rather than
- * one SPI transaction per pixel row -- a naive one-row-at-a-time version of
- * this file made every menu redraw visibly crawl (~3s, hundreds of tiny
- * transactions per row of text), see issue #19.
+ * Minimal GC9A01 SPI display driver -- sibling of display_st7789.c for
+ * round 240x240 IPS panels (the common 1.28" module). Same "no framebuffer,
+ * stream fill/text primitives straight to the panel via
+ * esp_lcd_panel_draw_bitmap()" approach and the same chunked-transfer /
+ * ping-ponged-buffer performance fixes as display_st7789.c -- see that
+ * file's header and issues #19 / #21 for the reasoning; only panel creation
+ * differs here.
+ *
+ * ESP-IDF's esp_lcd ships st7789/nt35510/ssd1306 but not GC9A01, so this
+ * pulls the espressif/esp_lcd_gc9a01 managed component (main/idf_component.yml).
+ * Compiled only when CONFIG_LAUNCHER_DISPLAY_DRIVER_GC9A01=y (see
+ * main/CMakeLists.txt); display_st7789.c takes over otherwise.
  */
+
+#include "sdkconfig.h"
+
+#if CONFIG_LAUNCHER_DISPLAY_DRIVER_GC9A01
 
 #include "display.h"
 #include "font5x7.h"
-#include "sdkconfig.h"
 
 #include <string.h>
 #include <ctype.h>
@@ -23,28 +30,22 @@
 #include "esp_lcd_io_spi.h"
 #include "esp_lcd_panel_vendor.h"
 #include "esp_lcd_panel_ops.h"
+#include "esp_lcd_gc9a01.h"
 #include "esp_log.h"
-
-/* Compiled only when this panel driver is the active choice (default);
- * display_gc9a01.c provides the same display.h API for round GC9A01 panels.
- * See main/CMakeLists.txt and the LAUNCHER_DISPLAY_DRIVER Kconfig choice. */
-#if CONFIG_LAUNCHER_DISPLAY_DRIVER_ST7789
 
 static const char *TAG = "display";
 
 #define DISPLAY_SPI_HOST   SPI2_HOST
-#define DISPLAY_WIDTH      CONFIG_LAUNCHER_DISPLAY_WIDTH
-#define DISPLAY_HEIGHT     CONFIG_LAUNCHER_DISPLAY_HEIGHT
-#define DISPLAY_GPIO_BL    CONFIG_LAUNCHER_DISPLAY_GPIO_BL
 
-/* ESP-IDF/Kconfig only emits a #define for a bool option when it is "y" --
- * when "n", the symbol is absent from sdkconfig.h entirely rather than
- * defined as 0 (see CLAUDE.md gotchas). These are read as plain C
- * expressions below (esp_lcd_panel_swap_xy/mirror args), not just inside
- * #if, so provide 0 fallbacks explicitly for whichever default to "n". */
-#ifndef CONFIG_LAUNCHER_DISPLAY_SWAP_XY
-#define CONFIG_LAUNCHER_DISPLAY_SWAP_XY 0
-#endif
+/* The GC9A01 is a fixed 240x240 square panel -- hardcoded, not from
+ * CONFIG_LAUNCHER_DISPLAY_WIDTH/HEIGHT (those are ST7789-only). No swap_xy
+ * either (square). Only mirror is board-dependent and stays configurable. */
+#define DISPLAY_WIDTH      240
+#define DISPLAY_HEIGHT     240
+
+/* Kconfig only emits a #define for a bool option when it is "y"; when "n"
+ * the symbol is absent entirely (not defined as 0). MIRROR_* are read as
+ * plain C expressions below, so provide 0 fallbacks. See CLAUDE.md gotchas. */
 #ifndef CONFIG_LAUNCHER_DISPLAY_MIRROR_X
 #define CONFIG_LAUNCHER_DISPLAY_MIRROR_X 0
 #endif
@@ -54,20 +55,8 @@ static const char *TAG = "display";
 
 static esp_lcd_panel_handle_t s_panel;
 
-/* Matches spi_bus_config_t.max_transfer_sz below (DISPLAY_WIDTH * 32 *
- * sizeof(uint16_t)) -- batching fill_area() into chunks of this many rows
- * per esp_lcd_panel_draw_bitmap() call, instead of one call per row, is
- * most of the fix for issue #19 (240 transactions for a full-screen clear
- * down to ~8). */
+/* See display_st7789.c for why this is chunked and ping-ponged (issues #19, #21). */
 #define FILL_CHUNK_ROWS 32
-/* Ping-ponged: esp_lcd_panel_draw_bitmap() hands the buffer straight to the
- * SPI driver's DMA queue and can return before the hardware has actually
- * finished reading it (see issue #21) -- reusing a single static buffer on
- * the very next call risks overwriting still-in-flight pixel data. The
- * driver drains all prior in-flight transactions at the start of its next
- * command, so alternating between two buffers guarantees one full
- * intervening call's worth of drain time before a given buffer is touched
- * again. */
 static uint16_t s_line_buf[2][DISPLAY_WIDTH * FILL_CHUNK_ROWS];
 static int s_line_buf_idx;
 
@@ -131,37 +120,38 @@ esp_err_t display_init(void) {
 
     esp_lcd_panel_dev_config_t panel_config = {
         .reset_gpio_num = CONFIG_LAUNCHER_DISPLAY_GPIO_RST,
-        .rgb_ele_order = LCD_RGB_ELEMENT_ORDER_RGB,
+        .rgb_ele_order = LCD_RGB_ELEMENT_ORDER_BGR,
         .bits_per_pixel = 16,
     };
-    err = esp_lcd_new_panel_st7789(io_handle, &panel_config, &s_panel);
+    err = esp_lcd_new_panel_gc9a01(io_handle, &panel_config, &s_panel);
     if (err != ESP_OK) {
-        ESP_LOGE(TAG, "esp_lcd_new_panel_st7789 failed: %s", esp_err_to_name(err));
+        ESP_LOGE(TAG, "esp_lcd_new_panel_gc9a01 failed: %s", esp_err_to_name(err));
         return err;
     }
 
     ESP_ERROR_CHECK(esp_lcd_panel_reset(s_panel));
     ESP_ERROR_CHECK(esp_lcd_panel_init(s_panel));
+    /* GC9A01 panels are IPS -- colour is inverted, same as the ST7789 IPS modules. */
     ESP_ERROR_CHECK(esp_lcd_panel_invert_color(s_panel, true));
-    /* Most 2.4" ST7789 modules are natively portrait (240x320); swap_xy is
-     * what actually produces the landscape (WIDTHxHEIGHT) image this driver
-     * assumes -- see CONFIG_LAUNCHER_DISPLAY_SWAP_XY. mirror_x/y are
-     * board-specific and can't be determined without the physical panel in
-     * hand, adjust via menuconfig if the image comes out flipped. */
-    ESP_ERROR_CHECK(esp_lcd_panel_swap_xy(s_panel, CONFIG_LAUNCHER_DISPLAY_SWAP_XY));
+    /* Square panel: no swap_xy. mirror_x/y depend on the module's scan
+     * direction / mounting -- adjust via menuconfig if the image is flipped. */
     ESP_ERROR_CHECK(esp_lcd_panel_mirror(s_panel, CONFIG_LAUNCHER_DISPLAY_MIRROR_X, CONFIG_LAUNCHER_DISPLAY_MIRROR_Y));
     ESP_ERROR_CHECK(esp_lcd_panel_disp_on_off(s_panel, true));
 
-    if (DISPLAY_GPIO_BL >= 0) {
-        gpio_config_t bl_cfg = {
-            .pin_bit_mask = 1ULL << DISPLAY_GPIO_BL,
-            .mode = GPIO_MODE_OUTPUT,
-        };
-        gpio_config(&bl_cfg);
-        gpio_set_level(DISPLAY_GPIO_BL, 1);
-    }
+    /* Compile-time guard, not just runtime: GC9A01 modules often hard-wire
+     * the backlight to 3V3 (CONFIG_LAUNCHER_DISPLAY_GPIO_BL = -1), and
+     * "1ULL << -1" is a -Wshift-count-negative warning even when the
+     * enclosing `if` would never run it. */
+#if CONFIG_LAUNCHER_DISPLAY_GPIO_BL >= 0
+    gpio_config_t bl_cfg = {
+        .pin_bit_mask = 1ULL << CONFIG_LAUNCHER_DISPLAY_GPIO_BL,
+        .mode = GPIO_MODE_OUTPUT,
+    };
+    gpio_config(&bl_cfg);
+    gpio_set_level(CONFIG_LAUNCHER_DISPLAY_GPIO_BL, 1);
+#endif
 
-    ESP_LOGI(TAG, "ST7789 ready (%dx%d)", DISPLAY_WIDTH, DISPLAY_HEIGHT);
+    ESP_LOGI(TAG, "GC9A01 ready (%dx%d)", DISPLAY_WIDTH, DISPLAY_HEIGHT);
     return ESP_OK;
 }
 
@@ -181,11 +171,8 @@ void display_fill_rect(int x, int y, int w, int h, display_color_t color) {
     fill_area(x, y, w, h, color);
 }
 
-/* 6*MAX_GLYPH_SCALE wide (5 font columns + 1 spacer) x 7*MAX_GLYPH_SCALE tall.
- * Ping-ponged for the same reason as s_line_buf above (issue #21): back-to-back
- * draw_glyph() calls (one per character in display_draw_text()'s loop) would
- * otherwise overwrite a shared buffer while its previous contents might still
- * be in flight over SPI/DMA, producing garbled glyphs. */
+/* Glyph cell: 6*MAX_GLYPH_SCALE wide x 7*MAX_GLYPH_SCALE tall. Ping-ponged
+ * for the same reason as s_line_buf (issue #21). Identical to display_st7789.c. */
 #define MAX_GLYPH_SCALE 6
 static uint16_t s_glyph_buf[2][6 * MAX_GLYPH_SCALE * 7 * MAX_GLYPH_SCALE];
 static int s_glyph_buf_idx;
@@ -200,18 +187,14 @@ static void draw_glyph(int x, int y, char ch, display_color_t fg, display_color_
     }
 
     if (scale > MAX_GLYPH_SCALE) {
-        scale = MAX_GLYPH_SCALE; /* clamp rather than overrun s_glyph_buf */
+        scale = MAX_GLYPH_SCALE;
     }
-    int glyph_w = 6 * scale; /* 5 font columns + 1 blank spacer column */
+    int glyph_w = 6 * scale;
     int glyph_h = 7 * scale;
     if (x < 0 || y < 0 || x + glyph_w > DISPLAY_WIDTH || y + glyph_h > DISPLAY_HEIGHT) {
-        return; /* off-screen: skip rather than deal with partial-buffer clipping */
+        return;
     }
 
-    /* Build the whole glyph cell in RAM and issue a single draw_bitmap call,
-     * instead of up to 35 tiny per-pixel-block transactions -- this is what
-     * actually made text-heavy screens slow (see issue #19), fill_area()'s
-     * own chunking helps but text was the dominant cost. */
     uint16_t *buf = s_glyph_buf[s_glyph_buf_idx ^= 1];
     for (int gy = 0; gy < glyph_h; gy++) {
         int font_row = gy / scale;
@@ -234,7 +217,7 @@ void display_draw_text(int x, int y, const char *text, display_color_t fg, displ
     int cursor_x = x;
     for (const char *p = text; *p != '\0'; p++) {
         draw_glyph(cursor_x, y, *p, fg, bg, scale);
-        cursor_x += 6 * scale; /* 5 glyph columns + 1 spacer column */
+        cursor_x += 6 * scale;
     }
 }
 
@@ -245,4 +228,4 @@ int display_text_width(const char *text, int scale) {
     return (int)strlen(text) * 6 * scale;
 }
 
-#endif /* CONFIG_LAUNCHER_DISPLAY_DRIVER_ST7789 */
+#endif /* CONFIG_LAUNCHER_DISPLAY_DRIVER_GC9A01 */

@@ -152,14 +152,50 @@ builds it for `esp32s3`, `esp32c3`, and `esp32` (classic WROOM) on every
 push. What does vary per board/chip:
 - **Flash size / partition table**: use `partitions.csv` (8MB, 3 slots) or
   `partitions_4mb.csv` (4MB, 2 slots) depending on your module.
-- **Screen/encoder pin mapping**: set via `idf.py menuconfig` →
+- **Display panel**: `LAUNCHER_DISPLAY_DRIVER` chooses **ST7789** (default,
+  e.g. a 2.4" 320×240 SPI module) or **GC9A01** (1.28" 240×240 round IPS).
+  Both implement the same panel-agnostic `display.h` API; only
+  `main/display_{st7789,gc9a01}.c` differ. GC9A01 pulls the
+  `espressif/esp_lcd_gc9a01` managed component (ESP-IDF's `esp_lcd` has no
+  built-in GC9A01 driver).
+- **Navigation input**: `LAUNCHER_NAV_DRIVER` chooses **EC11** rotary
+  encoder (default), **buttons** (3× momentary GPIO to GND: up / down /
+  select — for boards with no encoder), or **mock** (serial console).
+- **Screen / encoder / button pin mapping**: set via `idf.py menuconfig` →
   "Bootloader Launcher Configuration" (`CONFIG_LAUNCHER_DISPLAY_GPIO_*`,
-  `CONFIG_LAUNCHER_EC11_GPIO_*`) — always board-specific, not a portability
-  issue in itself.
+  `CONFIG_LAUNCHER_EC11_GPIO_*`, `CONFIG_LAUNCHER_BUTTONS_GPIO_*`) — always
+  board-specific, not a portability issue in itself. If you move the EC11
+  SW / buttons SELECT pin, keep `CONFIG_BOOTLOADER_NUM_PIN_FACTORY_RESET`
+  in `sdkconfig.defaults` in sync (crash-loop recovery, see below).
 - **BLE remote control on ESP32-S2**: the S2 has no Bluetooth. The BLE
   transport choice for `LAUNCHER_NET_REMOTE_CONTROL_ENABLE` is gated behind
   `depends on SOC_BLE_SUPPORTED` in Kconfig, so it's simply unavailable
   there (use the HTTP transport instead).
+
+### Example: round GC9A01 + 3 buttons on a classic ESP32-WROOM (4MB)
+
+`idf.py set-target esp32` then, in `menuconfig` (or appended to `sdkconfig`):
+
+```
+CONFIG_LAUNCHER_DISPLAY_DRIVER_GC9A01=y
+CONFIG_LAUNCHER_NAV_DRIVER_BUTTONS=y
+CONFIG_LAUNCHER_DISPLAY_GPIO_SCLK=18
+CONFIG_LAUNCHER_DISPLAY_GPIO_MOSI=23
+CONFIG_LAUNCHER_DISPLAY_GPIO_DC=4
+CONFIG_LAUNCHER_DISPLAY_GPIO_CS=17
+CONFIG_LAUNCHER_DISPLAY_GPIO_RST=16
+CONFIG_LAUNCHER_DISPLAY_GPIO_BL=-1     # backlight hard-wired to 3V3
+CONFIG_LAUNCHER_BUTTONS_GPIO_UP=19
+CONFIG_LAUNCHER_BUTTONS_GPIO_DOWN=14
+CONFIG_LAUNCHER_BUTTONS_GPIO_SELECT=13
+CONFIG_BOOTLOADER_NUM_PIN_FACTORY_RESET=13   # = buttons SELECT
+```
+
+The menu UI (`ui_menu.c`) is laid out for a landscape rectangle; on a round
+240×240 the circular bezel clips roughly the outer ~20 px, so the title and
+first menu row sit near the edge — usable as-is, but making the layout
+round-aware (a `LAUNCHER_DISPLAY_ROUND` bool nudging the margins in) is an
+open follow-up.
 
 ## Reusing this launcher in a new project
 
@@ -209,6 +245,31 @@ reusing/extending this repo:
   (native IDF component, ST7789 support is built into ESP-IDF core) rather
   than `TFT_eSPI`, to avoid an Arduino-compatibility-layer dependency in a
   pure ESP-IDF project.
+- **GC9A01 support is a sibling file (`display_gc9a01.c`), not a refactor of
+  `display_st7789.c` into shared-drawing + thin-panel files.** The two share
+  ~130 lines of panel-agnostic fill/glyph code, but keeping the tested
+  ST7789 path byte-for-byte untouched was worth the duplication for a first
+  pass; a later refactor can extract the common part once a third panel
+  makes the pattern pay off. CI builds the ST7789 default on all three
+  targets; the GC9A01 + buttons combo is verified against
+  `idf:release-v5.5` locally, not yet in the CI matrix (tracked as a
+  follow-up).
+- **`esp_lcd_gc9a01` (managed component) is the launcher's first non-built-in
+  dependency.** ESP-IDF's `esp_lcd` ships ST7789/NT35510/SSD1306 in-tree but
+  not GC9A01, and hand-vendoring the ~40-command init table is more
+  transcription risk than value. It is declared unconditionally in
+  `main/idf_component.yml` + `REQUIRES` (Kconfig-gated component requirements
+  are unreliable, see below) and dropped at link when `display_gc9a01.c`
+  isn't compiled. Both `managed_components/` and `dependencies.lock` are
+  gitignored — the lock is target-specific and rewritten on every `idf.py
+  set-target`, so it is churn for a 3-target CI repo; the `^2.0.0` spec in
+  `main/idf_component.yml` is the pin.
+- **The push-button nav driver (`nav_input_buttons.c`) polls every 10 ms
+  (clamped to at least one RTOS tick) rather than using a GPIO ISR** like
+  `nav_input_ec11.c`. A menu has no latency requirement, a bare
+  jumper-wire-to-GND (the expected bring-up input) bounces heavily, and
+  polling keeps the driver off the shared GPIO ISR service. SELECT doubles
+  as the bootloader factory-reset pin, same as the EC11 SW pin.
 - Kconfig bool options only get a `#define` in `sdkconfig.h` when set to
   `y` (ESP-IDF/Kconfig behavior, not a bug) — code that reads a bool config
   as a plain C expression (not inside `#if`) needs an explicit
