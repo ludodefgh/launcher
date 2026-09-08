@@ -97,22 +97,35 @@ device rebooting), treat it as a failed request.
 04000100-0100-0100-0100-48434e55414c
 ```
 
-Only present if the device has OTA enabled. Same payload shape as select:
+Only present if the device has OTA enabled. Payload:
 
 ```
 <label>
 ```
-or
+or, with a PIN:
 ```
 <label>:<pin>
 ```
+or, requesting a specific version (with or without a PIN):
+```
+<label>@<version_tag>
+<label>:<pin>@<version_tag>
+```
+
+`<version_tag>` is a GitHub release tag (e.g. `v1.2.0`), only meaningful for
+a manifest entry that uses `github_repo` — see
+[`docs/launcher-manifest.md`](launcher-manifest.md). Omitting it (either of
+the first two forms) installs the newest release, same as before this
+existed. Parsing splits on the **first** `@`, then the `:`-based label/pin
+split runs on whatever comes before it — a version tag containing a literal
+`@` isn't supported (not a realistic tag name in practice).
 
 Looks up the manifest entry whose `slot` field matches `<label>` and
 downloads it into that slot — the launcher does its own WiFi-based fetch
 exactly as if the user had used the local menu's "download a program"
 flow, just without any local UI involved. **No binary is transferred over
-BLE** — this characteristic only carries the trigger + slot, the actual
-download happens over the device's own WiFi connection.
+BLE** — this characteristic only carries the trigger + slot (+ optional
+version), the actual download happens over the device's own WiFi connection.
 
 Important limitations, by design (not bugs):
 - **Fire-and-forget**: writing this characteristic does not itself confirm
@@ -121,18 +134,14 @@ Important limitations, by design (not bugs):
   seconds to tens of seconds) and compare `version`/`flashed` to what they
   were before, to infer whether it worked. A slot that still shows the old
   version after a generous wait likely failed (check `unknown slot` /
-  `no manifest entry for this slot` / network issues on the device's own
-  logs if you have serial access).
-- **Always installs the newest release** for a manifest entry that uses
-  `github_repo` (see [`docs/launcher-manifest.md`](launcher-manifest.md)).
-  There's no remote version-picker round trip yet — installing an older
-  version (e.g. to rollback) still requires the local menu's interactive
-  "CHOOSE VERSION" step.
+  `no manifest entry for this slot` / `no release '<tag>' found` / network
+  issues on the device's own logs if you have serial access).
 - Fails silently (same as select above — a log line on the device, nothing
   over BLE) if: the slot label is unknown, no manifest entry declares that
-  slot, the manifest/GitHub fetch fails, or (for a `github_repo` entry) the
-  release has no `launcher.manifest.json` asset resolving a binary for the
-  device's own chip target.
+  slot, the manifest/GitHub fetch fails, the requested `<version_tag>`
+  doesn't match any release for that repo, or (for a `github_repo` entry)
+  the resolved release has no `launcher.manifest.json` asset resolving a
+  binary for the device's own chip target.
 
 ### Characteristic: WiFi credentials (WRITE) — requires `CONFIG_LAUNCHER_NET_WIFI_ENABLE`
 

@@ -26,15 +26,23 @@ void net_ota_run_download_flow(const nav_input_driver_t *drv);
  * up the manifest entry whose "slot" field matches slot_label and downloads
  * it into that slot with no local UI at all (no pickers, no confirm
  * prompt, no on-screen progress), meant for a remote trigger (see
- * net_remote_ble.c) rather than the local menu. For a github_repo entry,
- * always uses the newest release -- there's no remote version-picker round
- * trip yet, so installing an older version still needs the local menu.
+ * net_remote_ble.c) rather than the local menu.
+ *
+ * version_tag: NULL or an empty string picks the newest release, same as
+ * before this parameter existed. A non-empty value is looked up directly via
+ * net_github_fetch_release_by_tag() instead of net_github_fetch_tags()'s
+ * newest-first list -- this is what lets a remote caller roll back to (or
+ * pin) a specific version without the local menu's interactive "CHOOSE
+ * VERSION" step. Ignored for a manifest entry with a plain url/version (no
+ * github_repo) -- there's only ever one version to fetch there. Returns
+ * ESP_ERR_NOT_FOUND if version_tag doesn't match any release for that repo.
+ *
  * Requires WiFi already connected or connectable (calls net_wifi_connect()
  * itself). Blocking -- WiFi connect + manifest/GitHub fetches + the
  * download itself can take several seconds; callers must run this on a
  * dedicated task, never inline in a time-sensitive callback.
  */
-esp_err_t net_ota_update_slot_from_manifest(const char *slot_label);
+esp_err_t net_ota_update_slot_from_manifest(const char *slot_label, const char *version_tag);
 
 #ifdef __cplusplus
 }

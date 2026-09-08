@@ -24,6 +24,7 @@
 #endif
 #if CONFIG_LAUNCHER_NET_OTA_ENABLE
 #include "net_ota.h"
+#include "net_github.h"
 #endif
 
 static const char *TAG = "net_remote_ble";
@@ -74,6 +75,13 @@ static uint8_t s_own_addr_type;
 static bool s_started;
 
 #define SELECT_BUF_LEN 64
+#if CONFIG_LAUNCHER_NET_OTA_ENABLE
+/* label(31) + ':' + a generous pin + '@' + a version tag (NET_GITHUB_TAG_LEN-1)
+ * comfortably exceeds SELECT_BUF_LEN, which only ever needs to hold
+ * label[:pin] -- see handle_ota_update_write(). The app requests a 185-byte
+ * MTU (182-byte ATT payload), well over this. */
+#define OTA_BUF_LEN 128
+#endif
 
 /* Shared by every write characteristic here that takes "value:pin" --
  * splits on the first ':', trims `value` into `out_value` (capped at
@@ -132,15 +140,32 @@ static void handle_select_write(const char *value) {
 }
 
 #if CONFIG_LAUNCHER_NET_OTA_ENABLE
+typedef struct {
+    char label[32];
+    /* Empty string = newest release, same as omitting it entirely -- see
+     * net_ota_update_slot_from_manifest()'s version_tag doc comment. */
+    char version[NET_GITHUB_TAG_LEN];
+} ota_update_task_args_t;
+
 static void ota_update_task(void *param) {
-    char *slot_label = (char *)param;
-    esp_err_t err = net_ota_update_slot_from_manifest(slot_label);
-    ESP_LOGI(TAG, "remote (BLE) OTA update of '%s' finished: %s", slot_label, esp_err_to_name(err));
-    free(slot_label);
+    ota_update_task_args_t *args = (ota_update_task_args_t *)param;
+    const char *version_tag = args->version[0] != '\0' ? args->version : NULL;
+    esp_err_t err = net_ota_update_slot_from_manifest(args->label, version_tag);
+    ESP_LOGI(TAG, "remote (BLE) OTA update of '%s' (%s) finished: %s", args->label,
+             version_tag != NULL ? version_tag : "latest", esp_err_to_name(err));
+    free(args);
     vTaskDelete(NULL);
 }
 
-/* Fire-and-forget by design: no progress/result reported back over BLE (no
+/* Payload: "<label>[:<pin>][@<version>]" -- '@' is checked for first (and
+ * split off) so the existing "label[:pin]" shape parses exactly as before
+ * when there's no '@'; the ':'-based label/pin split then runs on whatever
+ * remains. A bare trailing '@' (empty version) is treated the same as no
+ * '@' at all. Same pragmatic tradeoff as this file's other wire formats
+ * (e.g. the WiFi payload's tab choice): a version tag containing a literal
+ * '@' would misparse, but that's not a realistic tag name.
+ *
+ * Fire-and-forget by design: no progress/result reported back over BLE (no
  * new characteristic for it yet) -- a client re-reads the slots
  * characteristic afterward to see whether the version/flashed state
  * changed. Runs on its own task rather than inline here: WiFi connect +
@@ -148,8 +173,24 @@ static void ota_update_task(void *param) {
  * far too long to block a GATT access callback (risks the central's ATT
  * operation timeout). */
 static void handle_ota_update_write(const char *value) {
+    char label_and_pin[OTA_BUF_LEN];
+    const char *version = NULL;
+    const char *at = strchr(value, '@');
+    if (at != NULL) {
+        size_t len = (size_t)(at - value);
+        if (len >= sizeof(label_and_pin)) {
+            len = sizeof(label_and_pin) - 1;
+        }
+        memcpy(label_and_pin, value, len);
+        label_and_pin[len] = '\0';
+        version = at + 1;
+    } else {
+        strncpy(label_and_pin, value, sizeof(label_and_pin) - 1);
+        label_and_pin[sizeof(label_and_pin) - 1] = '\0';
+    }
+
     char label[32];
-    const char *pin = split_value_pin(value, label, sizeof(label));
+    const char *pin = split_value_pin(label_and_pin, label, sizeof(label));
 
     if (!pin_ok(pin)) {
         ESP_LOGW(TAG, "BLE OTA-update write rejected: invalid/missing PIN");
@@ -168,19 +209,27 @@ static void handle_ota_update_write(const char *value) {
         return;
     }
 
-    char *slot_label_copy = strdup(label);
-    if (slot_label_copy == NULL) {
+    ota_update_task_args_t *args = calloc(1, sizeof(*args));
+    if (args == NULL) {
         ESP_LOGE(TAG, "OTA-update task spawn failed: out of memory");
         return;
     }
-    BaseType_t rc = xTaskCreate(ota_update_task, "launcher_ble_ota", CONFIG_LAUNCHER_NET_TASK_STACK_SIZE,
-                                slot_label_copy, tskIDLE_PRIORITY + 5, NULL);
+    strncpy(args->label, label, sizeof(args->label) - 1);
+    if (version != NULL) {
+        strncpy(args->version, version, sizeof(args->version) - 1);
+    }
+    BaseType_t rc = xTaskCreate(ota_update_task, "launcher_ble_ota", CONFIG_LAUNCHER_NET_TASK_STACK_SIZE, args,
+                                tskIDLE_PRIORITY + 5, NULL);
     if (rc != pdPASS) {
         ESP_LOGE(TAG, "OTA-update task spawn failed");
-        free(slot_label_copy);
+        free(args);
         return;
     }
-    ESP_LOGI(TAG, "remote (BLE) OTA update requested for '%s'", label);
+    /* Log from the local label/version (still-valid stack data), not
+     * args->... -- the just-spawned task owns *args now and may already have
+     * freed it by the time this line runs. */
+    ESP_LOGI(TAG, "remote (BLE) OTA update requested for '%s' (%s)", label,
+             (version != NULL && version[0] != '\0') ? version : "latest");
 }
 #endif
 
@@ -277,7 +326,7 @@ static int gatt_access_cb(uint16_t conn_handle, uint16_t attr_handle, struct ble
 
 #if CONFIG_LAUNCHER_NET_OTA_ENABLE
     if (attr_handle == s_ota_update_val_handle && ctxt->op == BLE_GATT_ACCESS_OP_WRITE_CHR) {
-        char buf[SELECT_BUF_LEN];
+        char buf[OTA_BUF_LEN];
         uint16_t len = 0;
         int rc = gatt_write_to_buf(ctxt->om, buf, sizeof(buf) - 1, &len);
         if (rc != 0) {
