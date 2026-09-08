@@ -235,33 +235,40 @@ menu "Bootloader Launcher Configuration"
                 Allows triggering boot_into() from a network transport (embedded
                 HTTP server or BLE) in addition to the local navigation HAL.
 
-        choice LAUNCHER_NET_REMOTE_TRANSPORT
-            prompt "Transport for remote control"
+        # Independent bools, not a choice: HTTP and BLE can both be on. BLE
+        # provisions WiFi credentials + boots slots with no WiFi needed; HTTP
+        # adds /upload (raw .bin push into a slot), which BLE has no
+        # equivalent for. Enabling both gives the full "bootstrap over BLE,
+        # push binaries over HTTP" flow -- see docs/espotg-integration.md.
+        config LAUNCHER_NET_REMOTE_TRANSPORT_HTTP
+            bool "Remote control over HTTP (esp_http_server)"
             depends on LAUNCHER_NET_REMOTE_CONTROL_ENABLE
-            default LAUNCHER_NET_REMOTE_TRANSPORT_HTTP
+            default y
+            select LAUNCHER_NET_WIFI_ENABLE
+            help
+                /boot, /wifi, and /upload (a raw .bin straight into an app
+                slot). Needs WiFi already connected. Safe to enable together
+                with the BLE transport below.
 
-            config LAUNCHER_NET_REMOTE_TRANSPORT_HTTP
-                bool "HTTP server (esp_http_server)"
-                select LAUNCHER_NET_WIFI_ENABLE
+        config LAUNCHER_NET_REMOTE_TRANSPORT_BLE
+            bool "Remote control over BLE (NimBLE GATT)"
+            depends on LAUNCHER_NET_REMOTE_CONTROL_ENABLE && SOC_BLE_SUPPORTED
+            select BT_ENABLED
+            default n
+            help
+                NimBLE GATT peripheral: slot list, boot, WiFi-credential
+                provisioning, and (with OTA enabled) a manifest-OTA trigger.
+                Works with no WiFi connection -- the only transport that can
+                bootstrap credentials onto a fresh device. No raw-binary push
+                over BLE (payload-bounded); pair it with the HTTP transport's
+                /upload for that.
 
-            config LAUNCHER_NET_REMOTE_TRANSPORT_BLE
-                bool "BLE (custom GATT service)"
-                depends on SOC_BLE_SUPPORTED
-                select BT_ENABLED
-                help
-                    Does not require CONFIG_LAUNCHER_NET_WIFI_ENABLE -- BLE works
-                    independently of the WiFi station connection.
-
-                    IMPORTANT: Kconfig's "select" cannot force a specific member
-                    of a choice (a Kconfig limitation, not a bug here -- see
-                    README.md). After picking this transport you must also go to
-                    "Component config > Bluetooth > Host" and select "NimBLE -
-                    BLE only" yourself (Bluedroid, the default, is a different
-                    API and net_remote_ble.c will not build against it). On
-                    classic ESP32 also set "Component config > Bluetooth >
-                    Controller > Mode" to "BLE Only" to avoid pulling in unused
-                    BR/EDR support.
-        endchoice
+                IMPORTANT: Kconfig's "select" cannot pick a Bluetooth host, so
+                after enabling this also set "Component config > Bluetooth >
+                Host" to "NimBLE - BLE only" yourself (Bluedroid, the default,
+                is a different API and net_remote_ble.c will not build against
+                it). On classic ESP32 also set "Component config > Bluetooth >
+                Controller > Mode" to "BLE Only".
 
         config LAUNCHER_NET_REMOTE_PIN
             string "PIN/token for remote control (optional)"

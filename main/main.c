@@ -30,7 +30,8 @@
 #if CONFIG_LAUNCHER_NET_REMOTE_CONTROL_ENABLE
 #if CONFIG_LAUNCHER_NET_REMOTE_TRANSPORT_HTTP
 #include "net_remote_http.h"
-#elif CONFIG_LAUNCHER_NET_REMOTE_TRANSPORT_BLE
+#endif
+#if CONFIG_LAUNCHER_NET_REMOTE_TRANSPORT_BLE
 #include "net_remote_ble.h"
 #endif
 #endif
@@ -156,7 +157,8 @@ static void run_wifi_and_http_remote(void *arg) {
         ESP_LOGI(TAG, "remote control HTTP server reachable at http://%s/", ip);
     }
 }
-#elif CONFIG_LAUNCHER_NET_REMOTE_TRANSPORT_BLE
+#endif
+#if CONFIG_LAUNCHER_NET_REMOTE_TRANSPORT_BLE
 static void run_ble_remote(void *arg) {
     (void)arg;
     net_remote_ble_start();
@@ -217,10 +219,14 @@ void app_main(void) {
 #endif
 
 #if CONFIG_LAUNCHER_NET_REMOTE_CONTROL_ENABLE
+        /* BLE first: it needs no WiFi and can carry the credentials the
+         * HTTP transport then connects with. Both run on the same worker
+         * task, one after the other. */
+#if CONFIG_LAUNCHER_NET_REMOTE_TRANSPORT_BLE
+        run_on_network_task(run_ble_remote, NULL); /* independent of WiFi */
+#endif
 #if CONFIG_LAUNCHER_NET_REMOTE_TRANSPORT_HTTP
         run_on_network_task(run_wifi_and_http_remote, NULL);
-#elif CONFIG_LAUNCHER_NET_REMOTE_TRANSPORT_BLE
-        run_on_network_task(run_ble_remote, NULL); /* independent of WiFi */
 #endif
 #endif
 

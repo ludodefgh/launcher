@@ -1,0 +1,22 @@
+# Partition table for a 4MB module running the launcher WITH network
+# features (OTA / remote control over HTTP and/or BLE). partitions_4mb.csv's
+# 640KB factory is not enough for those -- measured against
+# espressif/idf:release-v5.5, all-net (WiFi + TLS + esp_http_client + cJSON +
+# NimBLE) lands around 1.25MB. This table trades app-slot space for a 1.375MB
+# factory: 2 slots of ~1.2-1.3MB each, which is plenty for a guest app
+# (typically < 1MB).
+#
+# Like partitions_4mb.csv it must stay byte-identical between the launcher
+# and every guest app built against it (offsets pinned, not blank -- see
+# README.md and the note atop partitions.csv).
+#
+# `idf.py build`'s partition-size overflow check is only a WARNING, never a
+# build failure -- if factory ever outgrows 0x160000 here, fix the sizes,
+# don't flash past the warning (esptool has no partition-boundary concept).
+#
+# Name,       Type, SubType,  Offset,    Size,      Flags
+nvs,          data, nvs,      0x9000,    0x6000,
+otadata,      data, ota,      0xf000,    0x2000,
+factory,      app,  factory,  0x20000,   0x160000,
+app_slot1,    app,  ota_0,    0x180000,  0x150000,
+app_slot2,    app,  ota_1,    0x2d0000,  0x130000,
